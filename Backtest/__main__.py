@@ -320,8 +320,11 @@ class FundingRateBacktester:
 
     def save_results(self, df):
         """Save detailed results to CSV"""
-        output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                   f'backtest_results_delay_{self.delay_ms}ms.csv')
+        # Create Output/Backtest directory if it doesn't exist
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Backtest')
+        os.makedirs(output_dir, exist_ok=True)
+
+        output_file = os.path.join(output_dir, f'backtest_results_delay_{self.delay_ms}ms.csv')
         df.to_csv(output_file, index=False)
         print(f"\n💾 Detailed results saved to: {output_file}")
 
@@ -329,6 +332,10 @@ class FundingRateBacktester:
         """Create visualization plots"""
         if df.empty:
             return
+
+        # Create Output/Backtest directory if it doesn't exist
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Backtest')
+        os.makedirs(output_dir, exist_ok=True)
 
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
 
@@ -372,8 +379,7 @@ class FundingRateBacktester:
         plt.tight_layout()
 
         # Save plot
-        plot_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                f'backtest_analysis_delay_{self.delay_ms}ms.png')
+        plot_file = os.path.join(output_dir, f'backtest_analysis_delay_{self.delay_ms}ms.png')
         plt.savefig(plot_file, dpi=300, bbox_inches='tight')
         print(f"📊 Analysis plots saved to: {plot_file}")
         plt.close()
@@ -664,9 +670,12 @@ def create_stop_loss_optimization_plots(df, delay_ms):
 
     plt.tight_layout()
 
+    # Create Output/Backtest directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Backtest')
+    os.makedirs(output_dir, exist_ok=True)
+
     # Save plot
-    plot_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            f'stop_loss_optimization_delay_{delay_ms}ms.png')
+    plot_file = os.path.join(output_dir, f'stop_loss_optimization_delay_{delay_ms}ms.png')
     plt.savefig(plot_file, dpi=300, bbox_inches='tight')
     print(f"\n📊 Stop loss optimization plots saved to: {plot_file}")
     plt.close()
@@ -674,8 +683,11 @@ def create_stop_loss_optimization_plots(df, delay_ms):
 
 def save_stop_loss_optimization_results(df, delay_ms):
     """Save stop loss optimization results to CSV"""
-    output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                              f'stop_loss_optimization_delay_{delay_ms}ms.csv')
+    # Create Output/Backtest directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Backtest')
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_file = os.path.join(output_dir, f'stop_loss_optimization_delay_{delay_ms}ms.csv')
     df.to_csv(output_file, index=False)
     print(f"💾 Stop loss optimization results saved to: {output_file}")
 
@@ -684,7 +696,7 @@ if __name__ == "__main__":
     # Run single backtest with specific parameters
     backtester = FundingRateBacktester(
         initial_capital=1000,    # $10,000 starting capital
-        delay_ms=2000,            # 100ms server delay
+        delay_ms=1000,            # 100ms server delay
         stop_loss_pct=1,       # 1% stop loss
         leverage=1               # No leverage
     )

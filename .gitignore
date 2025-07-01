@@ -123,3 +123,4 @@ tmp/
 # DA/Negative\ Funding\ AggTrades/*.csv
 # DA/Trading\ Volume\ History/*.csv
 /comprehensive_analysis.png
+/Output/

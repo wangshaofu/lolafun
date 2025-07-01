@@ -19,8 +19,8 @@ from statsmodels.regression.quantile_regression import QuantReg
 script_dir = os.path.dirname(os.path.abspath(__file__))
 aggTrades_dir = os.path.join(script_dir, 'Negative Funding AggTrades')
 fundingRate_dir = os.path.join(script_dir, 'Funding Rate History')
+output_dir = os.path.join(os.path.dirname(script_dir), 'Output', 'Analyze')
 output_file = os.path.join(os.path.dirname(script_dir), 'fundingrate_vs_delta.csv')
-
 # Time window in seconds to look for max price change after settlement
 time_window_seconds = 10
 
@@ -453,9 +453,7 @@ def create_comprehensive_analysis_plots(results_df):
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-
-    # Save the comprehensive plot
-    comprehensive_plot_filename = os.path.join(os.path.dirname(script_dir), 'comprehensive_analysis.png')
+    comprehensive_plot_filename = os.path.join(output_dir, 'comprehensive_analysis.png')
     plt.savefig(comprehensive_plot_filename, dpi=300, bbox_inches='tight')
     print(f"Comprehensive analysis plot saved to '{comprehensive_plot_filename}'")
 
@@ -468,9 +466,9 @@ def create_delay_analysis_plots(delay_results, delay_summary, delay_intervals):
     """
     print("\n--- Creating Delay Analysis Plots ---")
 
-    # Create Analysis directory if it doesn't exist
-    analysis_dir = os.path.join(os.path.dirname(script_dir), 'Analysis')
-    os.makedirs(analysis_dir, exist_ok=True)
+    # Create Output/Analyze directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(script_dir), 'Output', 'Analyze')
+    os.makedirs(output_dir, exist_ok=True)
 
     # Create a comprehensive figure with multiple subplots
     fig = plt.figure(figsize=(20, 15))
@@ -547,12 +545,12 @@ def create_delay_analysis_plots(delay_results, delay_summary, delay_intervals):
         df_0 = pd.DataFrame(delay_results[0])
         all_impacts_0ms = df_0[df_0['delay_available']]['delay_impact'].tolist() if 'delay_available' in df_0.columns else []
 
-    if 100 in delay_results and delay_results[100]:
-        df_100 = pd.DataFrame(delay_results[100])
-        all_impacts_100ms = df_100[df_100['delay_available']]['delay_impact'].tolist() if 'delay_available' in df_100.columns else []
+    if 1000 in delay_results and delay_results[1000]:
+        df_1000 = pd.DataFrame(delay_results[1000])
+        all_impacts_1000ms = df_1000[df_1000['delay_available']]['delay_impact'].tolist() if 'delay_available' in df_1000.columns else []
 
     plt.hist(all_impacts_0ms, bins=20, alpha=0.6, label='0ms delay', color='blue', density=True)
-    plt.hist(all_impacts_100ms, bins=20, alpha=0.6, label='100ms delay', color='red', density=True)
+    plt.hist(all_impacts_1000ms, bins=20, alpha=0.6, label='1000ms delay', color='red', density=True)
     plt.xlabel('Slippage Impact (%)')
     plt.ylabel('Density')
     plt.title('Distribution of Slippage Impact')
@@ -587,13 +585,13 @@ def create_delay_analysis_plots(delay_results, delay_summary, delay_intervals):
     plt.tight_layout()
 
     # Save the delay analysis plot
-    delay_plot_filename = os.path.join(analysis_dir, 'delay_sensitivity_analysis.png')
+    delay_plot_filename = os.path.join(output_dir, 'delay_sensitivity_analysis.png')
     plt.savefig(delay_plot_filename, dpi=300, bbox_inches='tight')
     print(f"Delay sensitivity analysis plot saved to '{delay_plot_filename}'")
     plt.close()
 
     # Create a separate detailed comparison plot
-    create_detailed_delay_comparison_plot(delay_results, analysis_dir)
+    create_detailed_delay_comparison_plot(delay_results, output_dir)
 
 
 def create_detailed_delay_comparison_plot(delay_results, analysis_dir):
@@ -603,7 +601,7 @@ def create_detailed_delay_comparison_plot(delay_results, analysis_dir):
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
     # Compare available delays (0ms, 100ms, 200ms instead of hardcoded 50ms)
-    available_delays = [delay for delay in [0, 100, 200] if delay in delay_results and delay_results[delay]]
+    available_delays = [delay for delay in [0, 1000, 2000] if delay in delay_results and delay_results[delay]]
     colors = ['blue', 'orange', 'red']
     labels = [f'{delay}ms' for delay in available_delays]
 
@@ -688,7 +686,11 @@ def create_detailed_delay_comparison_plot(delay_results, analysis_dir):
     plt.tight_layout()
 
     # Save the detailed comparison plot
-    comparison_plot_filename = os.path.join(analysis_dir, 'delay_detailed_comparison.png')
+    # Create Output/Analyze directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Analyze')
+    os.makedirs(output_dir, exist_ok=True)
+
+    comparison_plot_filename = os.path.join(output_dir, 'delay_detailed_comparison.png')
     plt.savefig(comparison_plot_filename, dpi=300, bbox_inches='tight')
     print(f"Detailed delay comparison plot saved to '{comparison_plot_filename}'")
     plt.close()
@@ -755,7 +757,11 @@ def create_delay_summary_table_plot(delay_summary, analysis_dir):
               fontsize=14, fontweight='bold', pad=20)
 
     # Save the summary table plot
-    table_plot_filename = os.path.join(analysis_dir, 'delay_summary_table.png')
+    # Create Output/Analyze directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Analyze')
+    os.makedirs(output_dir, exist_ok=True)
+
+    table_plot_filename = os.path.join(output_dir, 'delay_summary_table.png')
     plt.savefig(table_plot_filename, dpi=300, bbox_inches='tight')
     print(f"Delay summary table saved to '{table_plot_filename}'")
     plt.close()
@@ -1166,6 +1172,7 @@ if __name__ == "__main__":
     2. Map timestamps to find corresponding trading data
     3. Analyze max price drops with different execution delays (0ms to 100ms)
     """
+    os.makedirs(output_dir, exist_ok=True)
     print("Starting analysis with delay sensitivity analysis...")
     print("=" * 60)
 
@@ -1184,7 +1191,7 @@ if __name__ == "__main__":
     print(f"\nStep 2: Analyzing price drops with different execution delays...")
 
     # Define delay intervals from 0ms to 1000ms in 100ms steps
-    delay_intervals = list(range(0, 2001, 200))  # [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+    delay_intervals = list(range(0, 2001, 500))
     delay_results = {}
 
     for delay_ms in delay_intervals:
@@ -1295,7 +1302,7 @@ if __name__ == "__main__":
             print("Use these lower bounds (5th percentile) for conservative trading expectations:")
 
             # Example predictions for common funding rate levels
-            common_rates = [-2.5, -2.0, -1.5, -1.0, -0.5, -0.3]
+            common_rates = [-2.0, -1.5, -1.0, -0.5]
 
             for rate in common_rates:
                 prediction = get_lower_bound_prediction(reg_results, rate)
