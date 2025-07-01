@@ -9,6 +9,10 @@ import os
 import glob
 from scipy import stats
 import csv
+from scipy.stats import t
+from sklearn.preprocessing import PolynomialFeatures
+import statsmodels.api as sm
+from statsmodels.regression.quantile_regression import QuantReg
 
 # --- Configuration ---
 # Directories
@@ -757,6 +761,404 @@ def create_delay_summary_table_plot(delay_summary, analysis_dir):
     plt.close()
 
 
+def calculate_regression_confidence_intervals(x_data, y_data, confidence_level=0.95):
+    """
+    Calculate confidence intervals for linear regression and quantile regression
+
+    Args:
+        x_data: Independent variable (funding rates)
+        y_data: Dependent variable (delta values)
+        confidence_level: Confidence level for intervals (default 0.95 for 95%)
+
+    Returns:
+        Dictionary containing regression results and confidence intervals
+    """
+    # Remove any NaN values
+    mask = ~(np.isnan(x_data) | np.isnan(y_data))
+    x_clean = x_data[mask]
+    y_clean = y_data[mask]
+
+    if len(x_clean) < 3:
+        print("Not enough data points for regression analysis")
+        return None
+
+    # Prepare data for statsmodels
+    X = sm.add_constant(x_clean)  # Add intercept
+
+    # 1. Linear regression with confidence intervals
+    linear_model = sm.OLS(y_clean, X).fit()
+
+    # Create prediction range
+    x_pred = np.linspace(x_clean.min(), x_clean.max(), 100)
+    X_pred = sm.add_constant(x_pred)
+
+    # Get predictions and confidence intervals
+    predictions = linear_model.predict(X_pred)
+    pred_summary = linear_model.get_prediction(X_pred)
+
+    # Confidence intervals for the mean (regression line)
+    conf_int = pred_summary.conf_int(alpha=1-confidence_level)
+
+    # Prediction intervals (for individual predictions)
+    pred_int = pred_summary.conf_int(alpha=1-confidence_level)
+
+    # 2. Quantile regression for 5th and 95th percentiles
+    try:
+        # 5th percentile (lower bound) - this is what you want for the lower bound
+        quantile_5 = QuantReg(y_clean, X).fit(q=0.05)
+        q5_predictions = quantile_5.predict(X_pred)
+
+        # 95th percentile (upper bound)
+        quantile_95 = QuantReg(y_clean, X).fit(q=0.95)
+        q95_predictions = quantile_95.predict(X_pred)
+
+        # 25th and 75th percentiles for additional context
+        quantile_25 = QuantReg(y_clean, X).fit(q=0.25)
+        q25_predictions = quantile_25.predict(X_pred)
+
+        quantile_75 = QuantReg(y_clean, X).fit(q=0.75)
+        q75_predictions = quantile_75.predict(X_pred)
+
+    except Exception as e:
+        print(f"Warning: Quantile regression failed: {e}")
+        q5_predictions = None
+        q95_predictions = None
+        q25_predictions = None
+        q75_predictions = None
+
+    return {
+        'x_pred': x_pred,
+        'mean_predictions': predictions,
+        'conf_lower': conf_int[:, 0],
+        'conf_upper': conf_int[:, 1],
+        'pred_lower': pred_int[:, 0],
+        'pred_upper': pred_int[:, 1],
+        'q5_predictions': q5_predictions,
+        'q95_predictions': q95_predictions,
+        'q25_predictions': q25_predictions,
+        'q75_predictions': q75_predictions,
+        'linear_model': linear_model,
+        'r_squared': linear_model.rsquared,
+        'correlation': np.corrcoef(x_clean, y_clean)[0, 1]
+    }
+
+
+def create_regression_analysis_plot(results_df, output_dir=None):
+    """
+    Create detailed regression analysis plot with confidence intervals and quantile regression
+    """
+    if output_dir is None:
+        output_dir = os.path.dirname(script_dir)
+
+    print("\n--- Creating Regression Analysis with Confidence Intervals ---")
+
+    # Calculate regression results
+    reg_results = calculate_regression_confidence_intervals(
+        results_df['fundingrate'].values,
+        results_df['delta'].values
+    )
+
+    if reg_results is None:
+        print("Could not perform regression analysis")
+        return
+
+    # Create the plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+
+    # Plot 1: Confidence intervals for regression line
+    ax1.scatter(results_df['fundingrate'], results_df['delta'], alpha=0.6, s=30, color='blue', label='Data points')
+
+    # Plot regression line and confidence intervals
+    ax1.plot(reg_results['x_pred'], reg_results['mean_predictions'], 'r-', linewidth=2, label='Linear regression')
+    ax1.fill_between(reg_results['x_pred'], reg_results['conf_lower'], reg_results['conf_upper'],
+                     alpha=0.3, color='red', label='95% Confidence interval')
+    ax1.fill_between(reg_results['x_pred'], reg_results['pred_lower'], reg_results['pred_upper'],
+                     alpha=0.1, color='gray', label='95% Prediction interval')
+
+    ax1.set_xlabel('Funding Rate (%)')
+    ax1.set_ylabel('Max Price Drop (%)')
+    ax1.set_title(f'Linear Regression with 95% Confidence Intervals\n(R² = {reg_results["r_squared"]:.4f})')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: Quantile regression (5th and 95th percentiles)
+    ax2.scatter(results_df['fundingrate'], results_df['delta'], alpha=0.6, s=30, color='blue', label='Data points')
+
+    if reg_results['q5_predictions'] is not None:
+        ax2.plot(reg_results['x_pred'], reg_results['q5_predictions'], 'g-', linewidth=2,
+                label='5th percentile (Lower bound)')
+        ax2.plot(reg_results['x_pred'], reg_results['q95_predictions'], 'orange', linewidth=2,
+                label='95th percentile (Upper bound)')
+        ax2.plot(reg_results['x_pred'], reg_results['q25_predictions'], 'g--', linewidth=1, alpha=0.7,
+                label='25th percentile')
+        ax2.plot(reg_results['x_pred'], reg_results['q75_predictions'], '--', color='orange', linewidth=1, alpha=0.7,
+                label='75th percentile')
+
+        # Fill the area between 25th and 75th percentiles
+        ax2.fill_between(reg_results['x_pred'], reg_results['q25_predictions'], reg_results['q75_predictions'],
+                        alpha=0.2, color='yellow', label='25th-75th percentile range')
+
+    # Add mean line for reference
+    ax2.plot(reg_results['x_pred'], reg_results['mean_predictions'], 'r--', linewidth=1, alpha=0.7, label='Mean (50th percentile)')
+
+    ax2.set_xlabel('Funding Rate (%)')
+    ax2.set_ylabel('Max Price Drop (%)')
+    ax2.set_title('Quantile Regression Analysis\n(Lower Bound Strategy)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save the plot
+    regression_plot_filename = os.path.join(output_dir, 'regression_confidence_analysis.png')
+    plt.savefig(regression_plot_filename, dpi=300, bbox_inches='tight')
+    print(f"Regression confidence analysis plot saved to '{regression_plot_filename}'")
+    plt.close()
+
+    # Print detailed analysis
+    print(f"\n--- Regression Analysis Results ---")
+    print(f"Linear regression R²: {reg_results['r_squared']:.4f}")
+    print(f"Correlation coefficient: {reg_results['correlation']:.4f}")
+
+    # Extract coefficients
+    slope = reg_results['linear_model'].params[1]
+    intercept = reg_results['linear_model'].params[0]
+    print(f"Linear equation: delta = {slope:.6f} * funding_rate + {intercept:.6f}")
+
+    if reg_results['q5_predictions'] is not None:
+        print(f"\n--- Lower Bound Analysis (5th Percentile) ---")
+
+        # Calculate some example predictions
+        example_rates = [-2.0, -1.5, -1.0, -0.5]
+        print(f"Expected lower bounds (5th percentile) for different funding rates:")
+
+        for rate in example_rates:
+            # Find closest prediction
+            idx = np.argmin(np.abs(reg_results['x_pred'] - rate))
+            lower_bound = reg_results['q5_predictions'][idx]
+            mean_pred = reg_results['mean_predictions'][idx]
+            upper_bound = reg_results['q95_predictions'][idx]
+
+            print(f"  {rate}% funding rate:")
+            print(f"    5th percentile (lower bound): {lower_bound:.4f}%")
+            print(f"    Mean prediction: {mean_pred:.4f}%")
+            print(f"    95th percentile (upper bound): {upper_bound:.4f}%")
+
+    return reg_results
+
+
+def print_quantile_regression_formulas(reg_results):
+    """
+    Print the mathematical formulas for all quantile regression lines
+
+    Args:
+        reg_results: Results from calculate_regression_confidence_intervals
+    """
+    if reg_results is None:
+        print("No regression results available")
+        return
+
+    print("\n" + "=" * 80)
+    print("QUANTILE REGRESSION FORMULAS")
+    print("=" * 80)
+
+    # Linear regression formula
+    slope = reg_results['linear_model'].params[1]
+    intercept = reg_results['linear_model'].params[0]
+    r_squared = reg_results['r_squared']
+    correlation = reg_results['correlation']
+
+    print(f"\n📈 LINEAR REGRESSION (Mean/50th Percentile):")
+    print(f"   Formula: Expected_Drop = {intercept:.6f} + ({slope:.6f}) × Funding_Rate")
+    print(f"   R² = {r_squared:.4f}")
+    print(f"   Correlation = {correlation:.4f}")
+
+    if reg_results['q5_predictions'] is not None:
+        # Extract quantile regression coefficients
+        # We need to fit the models again to get the coefficients
+        x_data = reg_results['linear_model'].model.exog[:, 1]  # Get original x data (without constant)
+        y_data = reg_results['linear_model'].model.endog  # Get original y data
+        X = sm.add_constant(x_data)
+
+        # Fit quantile models to get coefficients
+        try:
+            quantile_5 = QuantReg(y_data, X).fit(q=0.05)
+            quantile_25 = QuantReg(y_data, X).fit(q=0.25)
+            quantile_75 = QuantReg(y_data, X).fit(q=0.75)
+            quantile_95 = QuantReg(y_data, X).fit(q=0.95)
+
+            print(f"\n📊 QUANTILE REGRESSION FORMULAS:")
+            print(f"   (These define the percentage boundaries for expected price drops)")
+            print()
+
+            # 5th percentile (lower bound)
+            print(f"🟢 5th PERCENTILE (Conservative Lower Bound):")
+            print(f"   Formula: Lower_Bound = {quantile_5.params[0]:.6f} + ({quantile_5.params[1]:.6f}) × Funding_Rate")
+            print(f"   Meaning: 95% of actual drops will be ABOVE this line")
+            print(f"   Use for: Conservative profit targets, risk management")
+            print()
+
+            # 25th percentile
+            print(f"🟡 25th PERCENTILE:")
+            print(f"   Formula: Q25_Drop = {quantile_25.params[0]:.6f} + ({quantile_25.params[1]:.6f}) × Funding_Rate")
+            print(f"   Meaning: 75% of actual drops will be above this line")
+            print()
+
+            # 75th percentile
+            print(f"🟠 75th PERCENTILE:")
+            print(f"   Formula: Q75_Drop = {quantile_75.params[0]:.6f} + ({quantile_75.params[1]:.6f}) × Funding_Rate")
+            print(f"   Meaning: 25% of actual drops will be above this line")
+            print()
+
+            # 95th percentile (upper bound)
+            print(f"🔴 95th PERCENTILE (Optimistic Upper Bound):")
+            print(f"   Formula: Upper_Bound = {quantile_95.params[0]:.6f} + ({quantile_95.params[1]:.6f}) × Funding_Rate")
+            print(f"   Meaning: Only 5% of actual drops will be above this line")
+            print(f"   Use for: Optimistic scenarios, maximum profit potential")
+            print()
+
+            print(f"📋 FORMULA INTERPRETATION:")
+            print(f"   • Funding_Rate should be entered as percentage (e.g., -1.5 for -1.5%)")
+            print(f"   • Result will be the expected price drop percentage")
+            print(f"   • Negative funding rates (more negative) generally lead to larger drops")
+            print()
+
+            print(f"💡 PRACTICAL EXAMPLES:")
+            example_rates = [-2.0, -1.5, -1.0, -0.5]
+            print(f"   {'Rate':<8} {'5th %ile':<10} {'25th %ile':<10} {'Mean':<10} {'75th %ile':<10} {'95th %ile':<10}")
+            print(f"   {'-'*8} {'-'*9} {'-'*9} {'-'*9} {'-'*9} {'-'*9}")
+
+            for rate in example_rates:
+                q5_pred = quantile_5.params[0] + quantile_5.params[1] * rate
+                q25_pred = quantile_25.params[0] + quantile_25.params[1] * rate
+                mean_pred = intercept + slope * rate
+                q75_pred = quantile_75.params[0] + quantile_75.params[1] * rate
+                q95_pred = quantile_95.params[0] + quantile_95.params[1] * rate
+
+                print(f"   {rate:>6.1f}%  {q5_pred:>8.3f}%  {q25_pred:>8.3f}%  {mean_pred:>8.3f}%  {q75_pred:>8.3f}%  {q95_pred:>8.3f}%")
+
+            print()
+            print(f"🎯 TRADING STRATEGY RECOMMENDATIONS:")
+            print(f"   • Conservative Strategy: Use 5th percentile as minimum profit target")
+            print(f"   • Balanced Strategy: Use 25th percentile with mean as stretch target")
+            print(f"   • Aggressive Strategy: Use mean with 75th percentile as maximum target")
+            print(f"   • Position Sizing: Use difference between percentiles to gauge uncertainty")
+
+        except Exception as e:
+            print(f"   ❌ Could not extract quantile regression coefficients: {e}")
+    else:
+        print(f"\n❌ Quantile regression formulas not available")
+
+    print("\n" + "=" * 80)
+
+
+def get_lower_bound_prediction(reg_results, funding_rate):
+    """
+    Get the lower bound (5th percentile) prediction for a specific funding rate
+
+    Args:
+        reg_results: Results from calculate_regression_confidence_intervals
+        funding_rate: The funding rate to predict for
+
+    Returns:
+        Dictionary with predictions
+    """
+    if reg_results is None or reg_results['q5_predictions'] is None:
+        return None
+
+    # Find the closest prediction point
+    idx = np.argmin(np.abs(reg_results['x_pred'] - funding_rate))
+
+    return {
+        'funding_rate': funding_rate,
+        'lower_bound_5pct': reg_results['q5_predictions'][idx],
+        'mean_prediction': reg_results['mean_predictions'][idx],
+        'upper_bound_95pct': reg_results['q95_predictions'][idx],
+        'confidence_lower': reg_results['conf_lower'][idx],
+        'confidence_upper': reg_results['conf_upper'][idx]
+    }
+
+
+def print_5_percent_confidence_analysis(reg_results):
+    """
+    Print detailed 5% confidence interval analysis for trading decisions
+
+    Args:
+        reg_results: Results from calculate_regression_confidence_intervals
+    """
+    if reg_results is None or reg_results['q5_predictions'] is None:
+        print("\n❌ 5% Confidence interval analysis not available")
+        return
+
+    print("\n" + "🎯" * 40)
+    print("5% CONFIDENCE INTERVAL REGRESSION ANALYSIS")
+    print("🎯" * 40)
+
+    # Extract the quantile regression model for 5th percentile
+    try:
+        # Get the linear model parameters for 5th percentile
+        X = sm.add_constant(reg_results['x_pred'])
+        quantile_5_model = QuantReg(reg_results['q5_predictions'], X).fit(q=0.05, max_iter=1000)
+
+        # Calculate coefficients from the predictions (alternative approach)
+        x_data = reg_results['x_pred']
+        y_data = reg_results['q5_predictions']
+
+        # Simple linear fit to get coefficients
+        coeffs = np.polyfit(x_data, y_data, 1)
+        slope_5pct = coeffs[0]
+        intercept_5pct = coeffs[1]
+
+        print(f"\n🔥 5TH PERCENTILE REGRESSION FORMULA (CONSERVATIVE LOWER BOUND):")
+        print(f"   Min_Drop = {intercept_5pct:.6f} + ({slope_5pct:.6f}) × Funding_Rate")
+        print(f"   📊 Meaning: 95% of actual drops will be ABOVE this prediction")
+        print(f"   💰 Use case: Conservative profit targets, risk management")
+
+        print(f"\n📈 STATISTICAL INTERPRETATION:")
+        print(f"   • This formula gives you the MINIMUM expected drop")
+        print(f"   • Only 5% of historical cases performed worse than this")
+        print(f"   • Ideal for setting conservative stop-loss and profit targets")
+
+        print(f"\n💡 PRACTICAL TRADING EXAMPLES (5% Confidence Lower Bound):")
+        print(f"   {'Funding Rate':<12} {'Min Drop (5%)':<14} {'Probability':<20}")
+        print(f"   {'-'*12} {'-'*14} {'-'*20}")
+
+        example_rates = [-3.0, -2.5, -2.0, -1.5, -1.0, -0.5, -0.3]
+
+        for rate in example_rates:
+            min_drop_5pct = intercept_5pct + slope_5pct * rate
+            print(f"   {rate:>8.1f}%    {min_drop_5pct:>10.3f}%    95% chance of more drop")
+
+        print(f"\n🚀 TRADING STRATEGY RECOMMENDATIONS:")
+        print(f"   ✅ Conservative Entry: Use 5% bound as minimum profit expectation")
+        print(f"   ✅ Stop Loss: Set slightly below 5% bound for safety margin")
+        print(f"   ✅ Position Sizing: Larger positions when 5% bound shows good returns")
+        print(f"   ✅ Risk Management: If actual drop < 5% bound, exit early")
+
+        # Calculate some key statistics
+        print(f"\n📊 KEY STATISTICS FOR 5% CONFIDENCE INTERVAL:")
+        correlation = np.corrcoef(x_data, y_data)[0, 1]
+        print(f"   • Correlation with funding rate: {correlation:.4f}")
+        print(f"   • Slope sensitivity: {slope_5pct:.6f}% drop per 1% funding rate")
+        print(f"   • Base drop (at 0% funding): {intercept_5pct:.6f}%")
+
+        # Risk assessment
+        worst_case_funding = -3.0  # Example worst case
+        worst_case_drop = intercept_5pct + slope_5pct * worst_case_funding
+        print(f"   • Worst case scenario ({worst_case_funding}% funding): {worst_case_drop:.3f}% minimum drop")
+
+        print(f"\n⚠️  RISK WARNINGS:")
+        print(f"   • Past performance doesn't guarantee future results")
+        print(f"   • Market conditions can change rapidly")
+        print(f"   • Always use proper risk management and position sizing")
+        print(f"   • Consider multiple timeframes and market conditions")
+
+    except Exception as e:
+        print(f"   ❌ Could not extract 5% confidence interval coefficients: {e}")
+
+    print("\n" + "🎯" * 40)
+
+
 if __name__ == "__main__":
     """
     Main analysis function with delay sensitivity analysis:
@@ -878,6 +1280,31 @@ if __name__ == "__main__":
         print(f"\nBaseline results (0ms delay) saved to {output_file}")
         create_comprehensive_analysis_plots(results_df)
 
+        # NEW: Create regression analysis with confidence intervals and quantile regression
+        reg_results = create_regression_analysis_plot(results_df)
+
+        # NEW: Print detailed 5% confidence interval analysis
+        print_5_percent_confidence_analysis(reg_results)
+
+        # NEW: Print the mathematical formulas for all quantile regression lines
+        print_quantile_regression_formulas(reg_results)
+
+        # Create a practical prediction function for trading decisions
+        if reg_results is not None:
+            print(f"\n--- Practical Trading Predictions ---")
+            print("Use these lower bounds (5th percentile) for conservative trading expectations:")
+
+            # Example predictions for common funding rate levels
+            common_rates = [-2.5, -2.0, -1.5, -1.0, -0.5, -0.3]
+
+            for rate in common_rates:
+                prediction = get_lower_bound_prediction(reg_results, rate)
+                if prediction:
+                    print(f"  Funding Rate {rate:.1f}%:")
+                    print(f"    Expected minimum drop (5th percentile): {prediction['lower_bound_5pct']:.3f}%")
+                    print(f"    Average expected drop: {prediction['mean_prediction']:.3f}%")
+                    print(f"    Confidence interval: [{prediction['confidence_lower']:.3f}%, {prediction['confidence_upper']:.3f}%]")
+
         # Detailed statistics for baseline (0ms delay)
         print(f"\n--- Summary Statistics (Baseline - 0ms delay) ---")
         print(f"Number of data points: {len(results_df)}")
@@ -891,79 +1318,77 @@ if __name__ == "__main__":
         print(f"Average max absolute movement: {results_df['max_absolute_movement'].mean():.4f}%")
         print(f"Average trades per 10s window: {results_df['trades_in_window'].mean():.1f}")
 
-        # DELAY ANALYSIS - Calculate trade availability and lost opportunities
-        print(f"\n--- Trade Availability and Lost Opportunities ---")
+    # DELAY ANALYSIS - Calculate trade availability and lost opportunities
+    print(f"\n--- Trade Availability and Lost Opportunities ---")
 
-        # Compare all delay intervals for trade loss analysis
-        for delay_ms in delay_intervals:
-            if delay_results[delay_ms]:
-                delay_df = pd.DataFrame(delay_results[delay_ms])
-                trades_available = delay_df['delay_available'].sum()
-                total_events = len(delay_df)
-                availability_pct = trades_available / total_events * 100
-                trades_lost = total_events - trades_available
+    # Compare all delay intervals for trade loss analysis
+    for delay_ms in delay_intervals:
+        if delay_results[delay_ms]:
+            delay_df = pd.DataFrame(delay_results[delay_ms])
+            trades_available = delay_df['delay_available'].sum()
+            total_events = len(delay_df)
+            availability_pct = trades_available / total_events * 100
+            trades_lost = total_events - trades_available
 
-                print(f"  {delay_ms}ms delay:")
-                print(f"    Trades available: {trades_available}/{total_events} ({availability_pct:.1f}%)")
-                print(f"    Trades lost due to late entry: {trades_lost} ({100-availability_pct:.1f}%)")
+            print(f"  {delay_ms}ms delay:")
+            print(f"    Trades available: {trades_available}/{total_events} ({availability_pct:.1f}%)")
+            print(f"    Trades lost due to late entry: {trades_lost} ({100-availability_pct:.1f}%)")
 
-                if trades_available > 0:
-                    avg_slippage_impact = delay_df[delay_df['delay_available']]['delay_impact'].mean()
-                    print(f"    Average slippage impact (when trades available): {avg_slippage_impact:+.4f}%")
+            if trades_available > 0:
+                avg_slippage_impact = delay_df[delay_df['delay_available']]['delay_impact'].mean()
+                print(f"    Average slippage impact (when trades available): {avg_slippage_impact:+.4f}%")
 
-        # Analyze cases where price never dropped below funding rate price
-        no_drop_cases = results_df[results_df['initial_drop_percentage'] <= 0]
-        only_increase_cases = results_df[results_df['min_price'] >= results_df['first_price']]
+    # Analyze cases where price never dropped below funding rate price
+    no_drop_cases = results_df[results_df['initial_drop_percentage'] <= 0]
+    only_increase_cases = results_df[results_df['min_price'] >= results_df['first_price']]
 
-        print(f"\n--- Price Movement Patterns ---")
-        print(f"Cases where price never dropped below funding rate price: {len(no_drop_cases)} ({len(no_drop_cases)/len(results_df)*100:.1f}%)")
-        print(f"Cases where price only increased (min_price >= first_price): {len(only_increase_cases)} ({len(only_increase_cases)/len(results_df)*100:.1f}%)")
+    print(f"\n--- Price Movement Patterns ---")
+    print(f"Cases where price never dropped below funding rate price: {len(no_drop_cases)} ({len(no_drop_cases)/len(results_df)*100:.1f}%)")
+    print(f"Cases where price only increased (min_price >= first_price): {len(only_increase_cases)} ({len(only_increase_cases)/len(results_df)*100:.1f}%)")
 
-        if len(no_drop_cases) > 0:
-            print(f"Average funding rate for no-drop cases: {no_drop_cases['fundingrate'].mean():.4f}%")
-            print(f"Average price increase for no-drop cases: {no_drop_cases['max_increase_percentage'].mean():.4f}%")
+    if len(no_drop_cases) > 0:
+        print(f"Average funding rate for no-drop cases: {no_drop_cases['fundingrate'].mean():.4f}%")
+        print(f"Average price increase for no-drop cases: {no_drop_cases['max_increase_percentage'].mean():.4f}%")
 
-            print(f"\nTop 5 no-drop cases with highest increases:")
-            top_no_drop = no_drop_cases.nlargest(5, 'max_increase_percentage')
-            for idx, row in top_no_drop.iterrows():
-                print(f"  {row['symbol']}: {row['fundingrate']:.4f}% funding → +{row['max_increase_percentage']:.4f}% increase")
+        print(f"\nTop 5 no-drop cases with highest increases:")
+        top_no_drop = no_drop_cases.nlargest(5, 'max_increase_percentage')
+        for idx, row in top_no_drop.iterrows():
+            print(f"  {row['symbol']}: {row['fundingrate']:.4f}% funding → +{row['max_increase_percentage']:.4f}% increase")
 
-        # Analyze cases where price dropped significantly
-        significant_drop_cases = results_df[results_df['initial_drop_percentage'] > 1.0]  # More than 1% drop
-        print(f"Cases with >1% drop from funding price: {len(significant_drop_cases)} ({len(significant_drop_cases)/len(results_df)*100:.1f}%)")
+    # Analyze cases where price dropped significantly
+    significant_drop_cases = results_df[results_df['initial_drop_percentage'] > 1.0]  # More than 1% drop
+    print(f"Cases with >1% drop from funding price: {len(significant_drop_cases)} ({len(significant_drop_cases)/len(results_df)*100:.1f}%)")
 
-        if len(significant_drop_cases) > 0:
-            print(f"Average funding rate for significant drop cases: {significant_drop_cases['fundingrate'].mean():.4f}%")
-            print(f"Average drop for significant drop cases: {significant_drop_cases['initial_drop_percentage'].mean():.4f}%")
+    if len(significant_drop_cases) > 0:
+        print(f"Average funding rate for significant drop cases: {significant_drop_cases['fundingrate'].mean():.4f}%")
+        print(f"Average drop for significant drop cases: {significant_drop_cases['initial_drop_percentage'].mean():.4f}%")
 
-        # Simple linear regression statistics
-        model = LinearRegression()
-        X = results_df[['fundingrate']]
-        y = results_df['delta']
-        model.fit(X, y)
+    # Simple linear regression statistics
+    model = LinearRegression()
+    X = results_df[['fundingrate']]
+    y = results_df['delta']
+    model.fit(X, y)
 
-        correlation = results_df['fundingrate'].corr(results_df['delta'])
-        r_squared = model.score(X, y)
+    correlation = results_df['fundingrate'].corr(results_df['delta'])
+    r_squared = model.score(X, y)
 
-        print(f"\n--- Regression Analysis ---")
-        print(f"Correlation (funding rate vs max drop): {correlation:.4f}")
-        print(f"R-squared: {r_squared:.4f}")
-        print(f"Linear equation: max_drop = {model.coef_[0]:.6f} * funding_rate + {model.intercept_:.6f}")
+    print(f"\n--- Regression Analysis ---")
+    print(f"Correlation (funding rate vs max drop): {correlation:.4f}")
+    print(f"R-squared: {r_squared:.4f}")
+    print(f"Linear equation: max_drop = {model.coef_[0]:.6f} * funding_rate + {model.intercept_:.6f}")
 
-        # Additional insights
-        print(f"\n--- Key Insights ---")
-        most_negative_rate = results_df.loc[results_df['fundingrate'].idxmin()]
-        biggest_drop = results_df.loc[results_df['delta'].idxmax()]
-        biggest_increase = results_df.loc[results_df['max_increase_percentage'].idxmax()]
-        biggest_absolute_move = results_df.loc[results_df['max_absolute_movement'].idxmax()]
+    # Additional insights
+    print(f"\n--- Key Insights ---")
+    most_negative_rate = results_df.loc[results_df['fundingrate'].idxmin()]
+    biggest_drop = results_df.loc[results_df['delta'].idxmax()]
+    biggest_increase = results_df.loc[results_df['max_increase_percentage'].idxmax()]
+    biggest_absolute_move = results_df.loc[results_df['max_absolute_movement'].idxmax()]
 
-        print(f"Most negative funding rate: {most_negative_rate['fundingrate']:.4f}% ({most_negative_rate['symbol']}) → {most_negative_rate['delta']:.4f}% drop")
-        print(f"  Time: {most_negative_rate['fundingTimeReadable']}")
-        print(f"Biggest price drop: {biggest_drop['delta']:.4f}% ({biggest_drop['symbol']}) from {biggest_drop['fundingrate']:.4f}% funding rate")
-        print(f"  Time: {biggest_drop['fundingTimeReadable']}")
-        print(f"Biggest price increase: {biggest_increase['max_increase_percentage']:.4f}% ({biggest_increase['symbol']}) from {biggest_increase['fundingrate']:.4f}% funding rate")
-        print(f"  Time: {biggest_increase['fundingTimeReadable']}")
-        print(f"Biggest absolute movement: {biggest_absolute_move['max_absolute_movement']:.4f}% ({biggest_absolute_move['symbol']}) from {biggest_absolute_move['fundingrate']:.4f}% funding rate")
-        print(f"  Time: {biggest_absolute_move['fundingTimeReadable']}")
-    else:
-        print("No valid results to analyze")
+    print(f"Most negative funding rate: {most_negative_rate['fundingrate']:.4f}% ({most_negative_rate['symbol']}) → {most_negative_rate['delta']:.4f}% drop")
+    print(f"  Time: {most_negative_rate['fundingTimeReadable']}")
+    print(f"Biggest price drop: {biggest_drop['delta']:.4f}% ({biggest_drop['symbol']}) from {biggest_drop['fundingrate']:.4f}% funding rate")
+    print(f"  Time: {biggest_drop['fundingTimeReadable']}")
+    print(f"Biggest price increase: {biggest_increase['max_increase_percentage']:.4f}% ({biggest_increase['symbol']}) from {biggest_increase['fundingrate']:.4f}% funding rate")
+    print(f"  Time: {biggest_increase['fundingTimeReadable']}")
+    print(f"Biggest absolute movement: {biggest_absolute_move['max_absolute_movement']:.4f}% ({biggest_absolute_move['symbol']}) from {biggest_absolute_move['fundingrate']:.4f}% funding rate")
+    print(f"  Time: {biggest_absolute_move['fundingTimeReadable']}")

@@ -3,7 +3,7 @@ binance-futures-connector==4.1.0
 
 # Data analysis and manipulation
 pandas==2.3.0
-numpy==2.3.1
+numpy==2.2.6
 
 # HTTP requests and networking
 requests==2.32.4

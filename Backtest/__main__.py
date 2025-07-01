@@ -80,11 +80,14 @@ class FundingRateBacktester:
         entry_price = entry_trades.iloc[0]['price']
         entry_time = entry_trades.iloc[0]['transact_time']
 
-        # Calculate target prices
+        # Calculate target prices using quantile regression results
         # Since funding rate is negative, we go SHORT
-        # Take profit = entry_price * (1 + funding_rate) - we profit when price drops
-        take_profit_pct = -funding_rate  # Convert negative funding to positive take profit
-        take_profit_price = entry_price * (1 - take_profit_pct)  # SHORT profits when price drops
+        # Lower_Bound = -0.136717 + (-1.088807) × Funding_Rate (this gives conservative lower bound drop percentage)
+        lower_bound_drop_pct = -0.136717 + (-1.088807) * (funding_rate * 100)  # Convert to percentage for formula
+
+        # Take profit = entry_price * (1 - drop_pct/100) - we profit when price drops
+        take_profit_price = entry_price * (1 - lower_bound_drop_pct / 100)
+        take_profit_pct = lower_bound_drop_pct  # This is the conservative expected drop percentage
 
         # Stop loss = entry_price * (1 + stop_loss_pct) - we lose when price rises
         stop_loss_price = entry_price * (1 + self.stop_loss_pct)
@@ -448,7 +451,7 @@ def optimize_stop_loss(delay_ms=100, initial_capital=10000, leverage=1, entry_fe
         compound: Whether to compound returns
         threshold: Funding rate threshold
         stop_loss_range: Tuple of (min_stop_loss, max_stop_loss) percentages
-        step_size: Step size for stop loss testing
+        step_size: Step size for stop_loss testing
 
     Returns:
         Dictionary with optimization results
@@ -694,7 +697,7 @@ if __name__ == "__main__":
     # run_delay_sensitivity_analysis()
 
     # Run stop loss optimization
-    print("\n" + "=" * 80)
-    optimize_stop_loss(delay_ms=2000, initial_capital=10000, leverage=1,
-                       entry_fee_pct=0.05, exit_fee_pct=0.02, compound=False,
-                       threshold=-0.003, stop_loss_range=(0.5, 3.0), step_size=0.1)
+    # print("\n" + "=" * 80)
+    # optimize_stop_loss(delay_ms=2000, initial_capital=10000, leverage=1,
+    #                    entry_fee_pct=0.05, exit_fee_pct=0.02, compound=False,
+    #                    threshold=-0.003, stop_loss_range=(0.5, 3.0), step_size=0.1)
