@@ -173,36 +173,6 @@ def main():
         display_top_funding_rates(funding_rates, top_n=10)
         display_negative_funding_rates(funding_rates, threshold=-0.003)  # -0.3%
 
-        # Save current funding rates summary
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"current_funding_rates_{timestamp}.csv"
-
-        import csv
-        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['symbol', 'lastFundingRate', 'lastFundingRatePercent', 'markPrice', 'indexPrice',
-                         'interestRate', 'nextFundingTime', 'nextFundingTimeReadable']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-            writer.writeheader()
-            for rate in funding_rates:
-                writer.writerow({
-                    'symbol': rate['symbol'],
-                    'lastFundingRate': rate['lastFundingRate'],
-                    'lastFundingRatePercent': rate['lastFundingRatePercent'],
-                    'markPrice': rate['markPrice'],
-                    'indexPrice': rate['indexPrice'],
-                    'interestRate': rate['interestRate'],
-                    'nextFundingTime': rate['nextFundingTime'],
-                    'nextFundingTimeReadable': rate['nextFundingTimeReadable']
-                })
-
-        print(f"\n💾 Saved current funding rates to: {filename}")
-
-        # Display next funding time
-        if funding_rates:
-            next_funding = funding_rates[0]['nextFundingTimeReadable']
-            print(f"\n⏰ Next funding time: {next_funding}")
-
     except Exception as e:
         logger.error(f"Error in main function: {e}")
         print(f"❌ Error: {e}")

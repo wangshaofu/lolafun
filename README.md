@@ -103,7 +103,6 @@ Downloads aggregate trade data around severely negative funding rate events.
 
 ## Output Files
 
-- `current_funding_rates_YYYYMMDD_HHMMSS.csv` - Real-time snapshot
 - `DA/Funding Rate History/` - Historical funding rates by symbol
 - `DA/Trading Volume History/` - Volume analysis results
 - `DA/Negative Funding AggTrades/` - Detailed trade data
@@ -151,18 +150,3 @@ Downloads detailed trade-by-trade data in ±10 second windows around negative fu
 2. **Rate Limiting**: The scripts include delays to prevent API rate limits
 3. **Storage Space**: Monitor disk space when downloading historical data
 4. **Memory Usage**: Large datasets may require 8GB+ RAM for processing
-
-### Error Logs
-Check `funding_rate_bot.log` for detailed error information.
-
-## Disclaimer
-
-This project is for research and analysis purposes only. 
-- Not financial advice
-- Use at your own risk
-- Test thoroughly before any live trading
-- Comply with all applicable regulations
-
-## Contributing
-
-Feel free to submit issues and enhancement requests!
