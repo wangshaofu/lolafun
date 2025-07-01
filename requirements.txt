@@ -1,0 +1,33 @@
+# Core Binance API connector
+binance-futures-connector==4.1.0
+
+# Data analysis and manipulation
+pandas==2.3.0
+numpy==2.3.1
+
+# HTTP requests and networking
+requests==2.32.4
+urllib3==2.5.0
+
+# Date/time handling
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2025.2
+
+# Cryptography for API security
+pycryptodome==3.23.0
+
+# WebSocket support
+websocket-client==1.8.0
+
+# SSL certificate handling
+certifi==2025.6.15
+
+# Character encoding
+charset-normalizer==3.4.2
+
+# Network protocols
+idna==3.10
+
+# Python 2/3 compatibility
+six==1.17.0
