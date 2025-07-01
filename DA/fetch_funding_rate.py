@@ -19,8 +19,8 @@ def load_config(path='../config.ini'):
     return config
 
 
-def fetch_history_funding_rate(pair, start_time=None, limit=1000):
-    # split to loop for every month until today, then combine the results
+def fetch_history_funding_rate(pair, start_time=None, end_time=None, limit=1000):
+    # split to loop for every month until end_time, then combine the results
     full_funding_rate_list = []
     if start_time is None:  # default is today
         today = datetime.now()
@@ -28,15 +28,27 @@ def fetch_history_funding_rate(pair, start_time=None, limit=1000):
     else:
         start_time = date_to_milliseconds(start_time)
 
-    while datetime.now().timestamp() * 1000 - start_time > 0:
+    if end_time is None:  # default is current time
+        end_time = int(datetime.now().timestamp() * 1000)
+    else:
+        end_time = date_to_milliseconds(end_time)
+
+    while start_time < end_time:
+        # Calculate the end of current batch (either next month or the final end_time)
+        batch_end_time = min(start_time + 30 * 24 * 60 * 60 * 1000, end_time)
+
         funding_rate_list = um_futures_client.funding_rate(
             symbol=pair,
             startTime=start_time,
-            endTime=start_time + 30 * 24 * 60 * 60 * 1000,  # Fetch one month at a time
+            endTime=batch_end_time,
             limit=limit
         )
         full_funding_rate_list.extend(funding_rate_list)
-        start_time += 30 * 24 * 60 * 60 * 1000  # Move to the next month
+        start_time = batch_end_time  # Move to the next batch
+
+        # Add a small delay to avoid rate limiting
+        time.sleep(0.1)
+
     return full_funding_rate_list
 
 
@@ -77,10 +89,11 @@ if __name__ == "__main__":
         print(f"Fetching funding rates for {symbol}...")
         funding_rates = fetch_history_funding_rate(
             pair=symbol,
-            start_time='2022-01-01 00:00:00'
+            start_time='2025-01-01 00:00:00',
+            end_time='2025-03-01 00:00:00'
         )
         save_funding_rates_to_csv(symbol, funding_rates)
-        time.sleep(3.33)
+        time.sleep(0.33)
     print("Funding rate history fetching completed.")
     # print(um_futures_client.ping())
     # print(funding_rates)

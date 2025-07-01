@@ -72,7 +72,7 @@ APISecret = your_binance_api_secret_here
 
 ### Real-time Funding Rate Analysis
 ```bash
-python __main__.py
+python analyzer.py
 ```
 This will:
 - Display your futures account balance

@@ -344,7 +344,7 @@ if __name__ == "__main__":
                 print(f"    No historical data found for funding event {funding_time_readable}")
 
             # Rate limiting
-            time.sleep(0.5)
+            time.sleep(0.33)
 
         if all_kline_data:
             save_historical_trading_volume_to_csv(symbol, all_kline_data)

@@ -122,3 +122,4 @@ tmp/
 # DA/Funding\ Rate\ History/*.csv
 # DA/Negative\ Funding\ AggTrades/*.csv
 # DA/Trading\ Volume\ History/*.csv
+/comprehensive_analysis.png
