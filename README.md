@@ -6,7 +6,7 @@ An automated trading system that monitors Binance USD-M Futures funding rates an
 
 This bot:
 - Monitors funding rates across all Binance futures pairs in real-time
-- Identifies severely negative funding rates (≤ -0.3%) 
+- Identifies severely negative funding rates
 - Executes short positions exactly at funding settlement times
 - Uses Ed25519 WebSocket authentication for ultra-low latency
 - Implements NTP time synchronization for precise timing
@@ -27,7 +27,6 @@ This bot:
 
 ```
 ├── live_trading_bot_refactored.py    # Main trading bot
-├── test_ed25519_order.py            # Authentication testing
 ├── config.ini                       # API configuration
 ├── requirements.txt                  # Dependencies
 ├── private_key.pem                   # Ed25519 private key
@@ -109,19 +108,11 @@ python fetch_funding_rate.py         # Historical data collection
 4. **Exit**: Close positions using ML-derived profit targets and 1% stop loss
 
 ### Why It Works
-- **Negative funding** = Longs pay shorts (you receive payment)
 - **Price typically drops** after negative funding settlement due to:
   - Bearish sentiment indicated by negative funding
   - Long position closures to avoid funding fees
   - Selling pressure drives price down
-- **Dual profit**: Funding payment + capital gains from price drop
 
-### Risk Management
-- Fixed $100 position size
-- 1% stop loss on all positions
-- ML regression model for profit targets
-- Maximum 20 concurrent positions
-- Sub-millisecond timing precision
 
 ## 📊 Performance Monitoring
 
@@ -129,21 +120,8 @@ The bot tracks:
 - **Execution Latency**: Settlement to order fill time
 - **Slippage**: Expected vs actual fill prices  
 - **Success Rate**: Percentage of profitable trades
-- **Funding Capture**: Amount of funding payments received
 
 ## 🔧 Technical Details
-
-### NTP Time Synchronization
-- Primary NTP server: Japanese NTP servers
-- Backup servers: Multiple global fallbacks
-- Re-sync every 5 minutes
-- Sub-millisecond accuracy for precise timing
-
-### Machine Learning
-```python
-# Regression model for profit targets
-Expected_Drop = -0.136717 + (-1.088807) × Funding_Rate_Pct
-```
 
 ### WebSocket Trading
 - Ed25519 authenticated WebSocket orders
@@ -169,16 +147,6 @@ Expected_Drop = -0.136717 + (-1.088807) × Funding_Rate_Pct
 - Comprehensive error handling
 - Real-time monitoring and alerts
 
-## 🧪 Testing
-
-```bash
-# Test Ed25519 authentication
-python test_ed25519_order.py
-
-# Paper trading (use small position size)
-# Modify POSITION_SIZE_USD = 5.0 in the bot
-```
-
 ## 📝 Configuration Options
 
 ```python
@@ -197,15 +165,3 @@ NTP_SYNC_INTERVAL = 300            # 5 minute NTP sync
 - Market conditions change rapidly
 - Technical failures may result in losses
 - Always test thoroughly before live trading
-
-## 📞 Support
-
-For issues:
-1. Check `live_trading_bot.log`
-2. Review `config.ini` configuration
-3. Test with `test_ed25519_order.py`
-4. Verify NTP synchronization
-
----
-
-**Built with precision, deployed with caution. Trade responsibly.** ⚡
