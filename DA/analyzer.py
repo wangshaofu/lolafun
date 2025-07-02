@@ -20,7 +20,6 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 aggTrades_dir = os.path.join(script_dir, 'Negative Funding AggTrades')
 fundingRate_dir = os.path.join(script_dir, 'Funding Rate History')
 output_dir = os.path.join(os.path.dirname(script_dir), 'Output', 'Analyze')
-output_file = os.path.join(os.path.dirname(script_dir), 'fundingrate_vs_delta.csv')
 # Time window in seconds to look for max price change after settlement
 time_window_seconds = 10
 
@@ -465,11 +464,6 @@ def create_delay_analysis_plots(delay_results, delay_summary, delay_intervals):
     Create comprehensive delay analysis plots showing the impact of execution delays
     """
     print("\n--- Creating Delay Analysis Plots ---")
-
-    # Create Output/Analyze directory if it doesn't exist
-    output_dir = os.path.join(os.path.dirname(script_dir), 'Output', 'Analyze')
-    os.makedirs(output_dir, exist_ok=True)
-
     # Create a comprehensive figure with multiple subplots
     fig = plt.figure(figsize=(20, 15))
 
@@ -591,10 +585,10 @@ def create_delay_analysis_plots(delay_results, delay_summary, delay_intervals):
     plt.close()
 
     # Create a separate detailed comparison plot
-    create_detailed_delay_comparison_plot(delay_results, output_dir)
+    create_detailed_delay_comparison_plot(delay_results)
 
 
-def create_detailed_delay_comparison_plot(delay_results, analysis_dir):
+def create_detailed_delay_comparison_plot(delay_results):
     """
     Create detailed comparison plots for specific delay intervals
     """
@@ -685,18 +679,13 @@ def create_detailed_delay_comparison_plot(delay_results, analysis_dir):
 
     plt.tight_layout()
 
-    # Save the detailed comparison plot
-    # Create Output/Analyze directory if it doesn't exist
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Analyze')
-    os.makedirs(output_dir, exist_ok=True)
-
     comparison_plot_filename = os.path.join(output_dir, 'delay_detailed_comparison.png')
     plt.savefig(comparison_plot_filename, dpi=300, bbox_inches='tight')
     print(f"Detailed delay comparison plot saved to '{comparison_plot_filename}'")
     plt.close()
 
 
-def create_delay_summary_table_plot(delay_summary, analysis_dir):
+def create_delay_summary_table_plot(delay_summary):
     """
     Create a visual summary table of delay analysis results
     """
@@ -755,11 +744,6 @@ def create_delay_summary_table_plot(delay_summary, analysis_dir):
 
     plt.title('Delay Sensitivity Analysis Summary\nColor: Green=Good, Yellow=Moderate, Red=Poor',
               fontsize=14, fontweight='bold', pad=20)
-
-    # Save the summary table plot
-    # Create Output/Analyze directory if it doesn't exist
-    output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'Output', 'Analyze')
-    os.makedirs(output_dir, exist_ok=True)
 
     table_plot_filename = os.path.join(output_dir, 'delay_summary_table.png')
     plt.savefig(table_plot_filename, dpi=300, bbox_inches='tight')
@@ -849,13 +833,10 @@ def calculate_regression_confidence_intervals(x_data, y_data, confidence_level=0
     }
 
 
-def create_regression_analysis_plot(results_df, output_dir=None):
+def create_regression_analysis_plot(results_df):
     """
     Create detailed regression analysis plot with confidence intervals and quantile regression
     """
-    if output_dir is None:
-        output_dir = os.path.dirname(script_dir)
-
     print("\n--- Creating Regression Analysis with Confidence Intervals ---")
 
     # Calculate regression results
@@ -1165,33 +1146,19 @@ def print_5_percent_confidence_analysis(reg_results):
     print("\n" + "🎯" * 40)
 
 
-if __name__ == "__main__":
+def perform_delay_sensitivity_analysis(negative_funding_events, delay_intervals):
     """
-    Main analysis function with delay sensitivity analysis:
-    1. Find severely negative funding rates from historical data
-    2. Map timestamps to find corresponding trading data
-    3. Analyze max price drops with different execution delays (0ms to 100ms)
+    Perform delay sensitivity analysis for different execution delays
+
+    Args:
+        negative_funding_events: List of funding events to analyze
+        delay_intervals: List of delay intervals in milliseconds
+
+    Returns:
+        tuple: (delay_results, delay_summary) containing analysis results
     """
-    os.makedirs(output_dir, exist_ok=True)
-    print("Starting analysis with delay sensitivity analysis...")
-    print("=" * 60)
-
-    # Step 1: Find severely negative funding rates from historical data
-    print("\nStep 1: Finding severely negative funding rates...")
-    threshold = -0.003  # -0.3%
-    negative_funding_events = find_severely_negative_funding_rates(fundingRate_dir, threshold)
-
-    if not negative_funding_events:
-        print("No severely negative funding rates found!")
-        exit(0)
-
-    print(f"\nFound {len(negative_funding_events)} severely negative funding events!")
-
-    # Step 2: Analyze price drops for each delay interval
     print(f"\nStep 2: Analyzing price drops with different execution delays...")
 
-    # Define delay intervals from 0ms to 1000ms in 100ms steps
-    delay_intervals = list(range(0, 2001, 500))
     delay_results = {}
 
     for delay_ms in delay_intervals:
@@ -1216,7 +1183,7 @@ if __name__ == "__main__":
         delay_results[delay_ms] = results_for_delay
         print(f"Successfully analyzed {successful_count} out of {len(negative_funding_events)} events for {delay_ms}ms delay")
 
-    # Step 3: Create comprehensive delay analysis
+    # Create comprehensive delay analysis summary
     print(f"\n" + "=" * 80)
     print("DELAY SENSITIVITY ANALYSIS RESULTS")
     print("=" * 80)
@@ -1246,7 +1213,16 @@ if __name__ == "__main__":
 
             print(f"{delay_ms:<10} {valid_cases:<12} {avg_drop:<12.4f} {avg_increase:<15.4f} {avg_impact:<15.4f}")
 
-    # Analysis of delay impact on strategy performance
+    return delay_results, delay_summary
+
+
+def analyze_delay_performance(delay_summary):
+    """
+    Analyze delay impact on strategy performance
+
+    Args:
+        delay_summary: Summary of delay analysis results
+    """
     print(f"\n--- Strategy Performance Analysis ---")
     baseline_drop = delay_summary[0]['avg_drop']  # 0ms delay as baseline
     baseline_increase = delay_summary[0]['avg_increase']
@@ -1275,16 +1251,77 @@ if __name__ == "__main__":
     print(f"  Drop performance: {min_impact_delay['avg_drop']:.4f}%")
     print(f"  Trade availability: {min_impact_delay['trades_available']/min_impact_delay['valid_cases']*100:.1f}%")
 
+
+def analyze_trade_availability_and_opportunities(delay_results, delay_intervals):
+    """
+    Analyze trade availability and lost opportunities across different delays
+
+    Args:
+        delay_results: Dictionary of delay analysis results
+        delay_intervals: List of delay intervals analyzed
+    """
+    print(f"\n--- Trade Availability and Lost Opportunities ---")
+
+    # Compare all delay intervals for trade loss analysis
+    for delay_ms in delay_intervals:
+        if delay_results[delay_ms]:
+            delay_df = pd.DataFrame(delay_results[delay_ms])
+            trades_available = delay_df['delay_available'].sum()
+            total_events = len(delay_df)
+            availability_pct = trades_available / total_events * 100
+            trades_lost = total_events - trades_available
+
+            print(f"  {delay_ms}ms delay:")
+            print(f"    Trades available: {trades_available}/{total_events} ({availability_pct:.1f}%)")
+            print(f"    Trades lost due to late entry: {trades_lost} ({100-availability_pct:.1f}%)")
+
+            if trades_available > 0:
+                avg_slippage_impact = delay_df[delay_df['delay_available']]['delay_impact'].mean()
+                print(f"    Average slippage impact (when trades available): {avg_slippage_impact:+.4f}%")
+
+
+if __name__ == "__main__":
+    """
+    Main analysis function with delay sensitivity analysis:
+    1. Find severely negative funding rates from historical data
+    2. Map timestamps to find corresponding trading data
+    3. Analyze max price drops with different execution delays (0ms to 100ms)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    print("Starting analysis with delay sensitivity analysis...")
+    print("=" * 60)
+
+    # Step 1: Find severely negative funding rates from historical data
+    print("\nStep 1: Finding severely negative funding rates...")
+    threshold = -0.003  # -0.3%
+    negative_funding_events = find_severely_negative_funding_rates(fundingRate_dir, threshold)
+
+    if not negative_funding_events:
+        print("No severely negative funding rates found!")
+        exit(0)
+
+    print(f"\nFound {len(negative_funding_events)} severely negative funding events!")
+
+    # Step 2: Perform delay sensitivity analysis
+    delay_intervals = list(range(0, 2001, 500))
+    delay_results, delay_summary = perform_delay_sensitivity_analysis(negative_funding_events, delay_intervals)
+
+    # Step 3: Analyze delay performance
+    analyze_delay_performance(delay_summary)
+
     # Create delay analysis plots
     if delay_summary:
         create_delay_analysis_plots(delay_results, delay_summary, delay_intervals)
-        create_delay_summary_table_plot(delay_summary, os.path.join(os.path.dirname(script_dir), 'Analysis'))
+        create_delay_summary_table_plot(delay_summary)
 
     # Save baseline results (0ms delay) for plotting
     if delay_results[0]:
         results_df = pd.DataFrame(delay_results[0])
-        results_df.to_csv(output_file, index=False)
-        print(f"\nBaseline results (0ms delay) saved to {output_file}")
+        delta_output_dir = os.path.join(output_dir, 'fundingrate_vs_delta.csv')
+        print(f"Saving baseline results to {delta_output_dir}...")
+
+        results_df.to_csv(delta_output_dir, index=False)
+        print(f"\nBaseline results (0ms delay) saved to {delta_output_dir}")
         create_comprehensive_analysis_plots(results_df)
 
         # NEW: Create regression analysis with confidence intervals and quantile regression
@@ -1325,25 +1362,8 @@ if __name__ == "__main__":
         print(f"Average max absolute movement: {results_df['max_absolute_movement'].mean():.4f}%")
         print(f"Average trades per 10s window: {results_df['trades_in_window'].mean():.1f}")
 
-    # DELAY ANALYSIS - Calculate trade availability and lost opportunities
-    print(f"\n--- Trade Availability and Lost Opportunities ---")
-
-    # Compare all delay intervals for trade loss analysis
-    for delay_ms in delay_intervals:
-        if delay_results[delay_ms]:
-            delay_df = pd.DataFrame(delay_results[delay_ms])
-            trades_available = delay_df['delay_available'].sum()
-            total_events = len(delay_df)
-            availability_pct = trades_available / total_events * 100
-            trades_lost = total_events - trades_available
-
-            print(f"  {delay_ms}ms delay:")
-            print(f"    Trades available: {trades_available}/{total_events} ({availability_pct:.1f}%)")
-            print(f"    Trades lost due to late entry: {trades_lost} ({100-availability_pct:.1f}%)")
-
-            if trades_available > 0:
-                avg_slippage_impact = delay_df[delay_df['delay_available']]['delay_impact'].mean()
-                print(f"    Average slippage impact (when trades available): {avg_slippage_impact:+.4f}%")
+    # Analyze trade availability and lost opportunities
+    analyze_trade_availability_and_opportunities(delay_results, delay_intervals)
 
     # Analyze cases where price never dropped below funding rate price
     no_drop_cases = results_df[results_df['initial_drop_percentage'] <= 0]

@@ -390,7 +390,7 @@ def run_delay_sensitivity_analysis():
     print("\n🔬 DELAY SENSITIVITY ANALYSIS")
     print("=" * 60)
 
-    delays = [0, 100, 200, 500, 2000, 5000]  # milliseconds
+    delays = [0, 1000, 2000]  # milliseconds
     results = []
 
     for delay in delays:
@@ -705,11 +705,11 @@ if __name__ == "__main__":
     backtester.run_backtest(threshold=-0.003)  # -0.3% funding rate threshold
 
     # Run delay sensitivity analysis
-    # print("\n" + "=" * 80)
-    # run_delay_sensitivity_analysis()
+    print("\n" + "=" * 80)
+    run_delay_sensitivity_analysis()
 
     # Run stop loss optimization
     # print("\n" + "=" * 80)
-    # optimize_stop_loss(delay_ms=2000, initial_capital=10000, leverage=1,
+    # optimize_stop_loss(delay_ms=1000, initial_capital=10000, leverage=1,
     #                    entry_fee_pct=0.05, exit_fee_pct=0.02, compound=False,
     #                    threshold=-0.003, stop_loss_range=(0.5, 3.0), step_size=0.1)
