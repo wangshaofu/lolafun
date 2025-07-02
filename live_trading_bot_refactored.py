@@ -64,6 +64,10 @@ class ScheduledTrade:
         sync_time = self.settlement_time_ms - 10000  # 10 seconds before
         return (current_time_ms >= sync_time and not self.ntp_sync_done)
 
+    def is_opportunity_missed(self, current_time_ms: int, max_delay_ms: int = 10000) -> bool:
+        """Check if this opportunity has been missed (too much time passed after settlement)"""
+        return current_time_ms > (self.settlement_time_ms + max_delay_ms) and not self.is_executed
+
 
 class LiveTradingBot:
     """Main trading bot class - refactored and modular"""
@@ -152,6 +156,23 @@ class LiveTradingBot:
         except Exception as e:
             logger.error(f"Error calculating position quantity for {symbol}: {e}")
             return 0.0
+
+    async def monitor_positions(self):
+        """Simplified monitoring for ultra-short positions (≤10 seconds)"""
+        current_time = self.ntp_sync.get_ntp_time_ms()
+        for position in self.active_positions[:]:
+            if not position.is_active:
+                continue
+            if position.symbol in self.market_streams:
+                stream = self.market_streams[position.symbol]
+                current_price = stream.get_mid_price()
+                if current_price > 0:
+                    unrealized_pnl = position.get_unrealized_pnl(current_price)
+                    position_age_seconds = (current_time - position.entry_time) / 1000
+                    if int(position_age_seconds) % 5 == 0:  # Every 5 seconds
+                        logger.debug(f"📊 {position.symbol} | Age: {position_age_seconds:.1f}s | P&L: ${unrealized_pnl:.2f}")
+                    if position_age_seconds > 60:  # More than 1 minute - something's wrong
+                        logger.warning(f"⚠️ {position.symbol} position open for {position_age_seconds:.1f}s - SL/TP orders may have failed")
 
     async def scan_funding_opportunities(self):
         """Scan for new funding rate opportunities and schedule them for settlement time"""
@@ -313,6 +334,9 @@ class LiveTradingBot:
                 else:
                     logger.error(f"❌ Failed to execute scheduled trade for {scheduled_trade.symbol}")
                 self.scheduled_trades.remove(scheduled_trade)
+            elif scheduled_trade.is_opportunity_missed(current_time):
+                logger.info(f"⏰ Opportunity missed for {scheduled_trade.symbol} - too late to execute")
+                scheduled_trade.is_executed = True  # Mark as executed to avoid future attempts
 
     async def execute_trading_strategy(self):
         """Main trading strategy execution loop"""
@@ -326,10 +350,11 @@ class LiveTradingBot:
         scan_counter = 0
         try:
             while True:
-                # Monitor existing positions
+                # Monitor existing positions for exit conditions
                 await self.monitor_positions()
                 # Monitor scheduled trades and execute when time comes (check frequently for precision)
                 await self.monitor_scheduled_trades()
+
                 if scan_counter % 300 == 0:
                     await self.scan_funding_opportunities()
                 if scan_counter % 300 == 0:
@@ -442,18 +467,32 @@ class LiveTradingBot:
     async def cleanup_stale_scheduled_trades(self, current_funding_rates: List[Dict]):
         """Remove scheduled trades that are no longer viable (e.g., funding rate no longer negative enough)"""
         try:
+            current_time_ms = self.ntp_sync.get_ntp_time_ms()
             for trade in self.scheduled_trades[:]:  # Create copy to avoid modification during iteration
-                # If trade is executed, skip it
                 if trade.is_executed:
                     continue
+                should_remove = False
+                removal_reason = ""
                 # Check if the symbol still has a sufficiently negative funding rate
                 symbol_funding_data = next((rate for rate in current_funding_rates if rate['symbol'] == trade.symbol), None)
-                current_funding_rate = symbol_funding_data['lastFundingRate']
-                if current_funding_rate > self.funding_analyzer.funding_threshold:
-                    removal_reason = f"funding rate improved to {current_funding_rate * 100:.3f}% (above {self.funding_analyzer.funding_threshold * 100:.1f}% threshold)"
+                if symbol_funding_data is None:
+                    should_remove = True
+                    removal_reason = "symbol no longer has funding rate data"
+                else:
+                    current_funding_rate = symbol_funding_data['lastFundingRate']
+                    if current_funding_rate > self.funding_analyzer.funding_threshold:
+                        should_remove = True
+                        removal_reason = f"funding rate improved to {current_funding_rate * 100:.3f}% (above {self.funding_analyzer.funding_threshold * 100:.1f}% threshold)"
+                # Check if opportunity was missed (settlement time passed)
+                if not should_remove and trade.is_opportunity_missed(current_time_ms):
+                    should_remove = True
+                    settlement_datetime = datetime.fromtimestamp(trade.settlement_time_ms / 1000)
+                    removal_reason = f"settlement time passed at {settlement_datetime}"
+
+                if should_remove:
                     logger.info(f"🗑️ Removing stale scheduled trade for {trade.symbol} - {removal_reason}")
                     self.scheduled_trades.remove(trade)
-                    continue
+
         except Exception as e:
             logger.error(f"Error cleaning up stale scheduled trades: {e}")
 

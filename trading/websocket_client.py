@@ -314,3 +314,22 @@ class WebSocketTradingClient:
             except Exception as e:
                 logger.error(f"Error in WebSocket maintenance: {e}")
                 await asyncio.sleep(5)  # Wait before retrying
+
+    async def close(self):
+        """Close WebSocket connection and cleanup resources"""
+        try:
+            # Cancel the maintenance task
+            if self.connection_task and not self.connection_task.done():
+                self.connection_task.cancel()
+                try:
+                    await self.connection_task
+                except asyncio.CancelledError:
+                    pass
+            # Close the WebSocket connection
+            async with self.ws_lock:
+                if self.websocket:
+                    await self.websocket.close()
+                    self.websocket = None
+                    logger.info("WebSocket trading connection closed")
+        except Exception as e:
+            logger.error(f"Error closing WebSocket connection: {e}")
