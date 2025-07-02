@@ -1,5 +1,6 @@
 # Configuration files (contains API keys)
 config.ini
+private_key.pem
 
 # Data directories - exclude large CSV datasets
 DA/Funding\ Rate\ History/
