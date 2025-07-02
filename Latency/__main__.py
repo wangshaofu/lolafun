@@ -41,6 +41,9 @@ async def measure_one_way(offset, n):
             msg = await ws.recv()
             recv_ms = time.time() * 1000
             data = json.loads(msg)
+            # best_bid = data.get("b")
+            # best_ask = data.get("a")
+            # print(f"Best Bid: {best_bid}, Best Ask: {best_ask}")
             event_ms = data.get("E")
             if event_ms:
                 adjusted_event = event_ms + offset

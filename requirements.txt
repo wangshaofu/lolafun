@@ -16,6 +16,7 @@ tzdata==2025.2
 
 # Cryptography for API security
 pycryptodome==3.23.0
+cryptography==42.0.0
 
 # WebSocket support
 websocket-client==1.8.0
