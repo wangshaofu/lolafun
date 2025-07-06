@@ -3,14 +3,14 @@ config.ini
 private_key.pem
 
 # Data directories - exclude large CSV datasets
-DA/Funding\ Rate\ History/
-DA/Negative\ Funding\ AggTrades/
-DA/Trading\ Volume\ History/
+.rationale/DA/Funding\ Rate\ History/
+.rationale/DA/Negative\ Funding\ AggTrades/
+.rationale/DA/Trading\ Volume\ History/
 
 # Alternative patterns for data directories (in case spaces cause issues)
-DA/Funding*Rate*History/
-DA/Negative*Funding*AggTrades/
-DA/Trading*Volume*History/
+.rationale/DA/Funding*Rate*History/
+.rationale/DA/Negative*Funding*AggTrades/
+.rationale/DA/Trading*Volume*History/
 
 # Python cache and compiled files
 __pycache__/
@@ -124,4 +124,4 @@ tmp/
 # DA/Negative\ Funding\ AggTrades/*.csv
 # DA/Trading\ Volume\ History/*.csv
 /comprehensive_analysis.png
-/Output/
+/.rationale/Output/

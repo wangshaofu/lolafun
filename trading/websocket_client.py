@@ -192,7 +192,6 @@ class WebSocketTradingClient:
                 "quantity": formatted_quantity,
                 "stopPrice": formatted_stop_price,
                 "positionSide": "SHORT",  # SHORT position in Hedge mode
-                "reduceOnly": "true",
                 "timestamp": current_time,
                 "recvWindow": 5000
             }
@@ -229,7 +228,6 @@ class WebSocketTradingClient:
                 "quantity": formatted_quantity,
                 "stopPrice": formatted_tp_price,
                 "positionSide": "SHORT",  # SHORT position in Hedge mode
-                "reduceOnly": "true",
                 "timestamp": current_time,
                 "recvWindow": 5000
             }

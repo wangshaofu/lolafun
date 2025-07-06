@@ -135,11 +135,3 @@ class SymbolPrecisionManager:
         rounded_price = self.round_price(symbol, price)
         precision = self.get_symbol_precision(symbol)['pricePrecision']
         return f"{rounded_price:.{precision}f}"
-
-    def validate_order_size(self, symbol: str, quantity: float, price: float) -> bool:
-        """Validate if order meets minimum notional requirements"""
-        precision_data = self.get_symbol_precision(symbol)
-        notional_value = quantity * price
-        min_notional = precision_data['minNotional']
-
-        return notional_value >= min_notional

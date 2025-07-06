@@ -3,12 +3,10 @@ import numpy as np
 import os
 import sys
 import matplotlib.pyplot as plt
-from datetime import datetime
-import csv
 
 # Add the parent directory to the path to import from DA
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from DA.analyzer import find_severely_negative_funding_rates, find_corresponding_trading_data
+from Rationale.DA.analyzer import find_severely_negative_funding_rates, find_corresponding_trading_data
 
 class FundingRateBacktester:
     def __init__(self, initial_capital=10000, delay_ms=0, stop_loss_pct=1.0, leverage=1, entry_fee_pct=0.05, exit_fee_pct=0.02, compound=False):

@@ -34,4 +34,9 @@ class TradingPosition:
         if not self.is_active:
             return self.realized_pnl
 
+        # Safety check to prevent division by zero
+        if self.entry_price == 0:
+            logger.error(f"Entry price is zero for position {self.symbol}, cannot calculate PnL")
+            return 0.0
+
         return ((self.entry_price - current_price) / self.entry_price) * self.position_size

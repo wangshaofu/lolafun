@@ -6,6 +6,7 @@ Provides accurate time synchronization with NTP servers for precise trading oper
 
 import time
 import logging
+from datetime import datetime
 import ntplib
 from typing import Tuple
 
@@ -23,16 +24,13 @@ class NTPTimeSync:
         self.max_retries = 3
 
     def sync_time(self) -> Tuple[float, float]:
-        """
-        Synchronize with NTP server with fallback servers
-        Returns (offset_ms, delay_ms)
-        """
+        """Synchronize with NTP server with fallback servers"""
         servers_to_try = [self.server] + self.backup_servers
         for server in servers_to_try:
             for attempt in range(self.max_retries):
                 try:
                     client = ntplib.NTPClient()
-                    client.request_timeout = 5  # 5 second timeout
+                    client.request_timeout = 5
                     t0 = time.time() * 1000
                     resp = client.request(server, version=3)
                     t1 = time.time() * 1000
@@ -41,37 +39,53 @@ class NTPTimeSync:
                     self.offset_ms = local_mid_ms - server_time_ms
                     delay_ms = resp.delay * 1000
                     self.last_sync_time = time.time()
-                    logger.info(f"NTP sync successful with {server}: offset={self.offset_ms:.2f}ms, delay={delay_ms:.2f}ms")
+
+                    # Enhanced logging with actual NTP time
+                    ntp_time = datetime.fromtimestamp(server_time_ms / 1000)
+                    local_time = datetime.fromtimestamp(local_mid_ms / 1000)
+                    logger.info(f"NTP sync successful with {server}")
+                    logger.info(f"  Server time: {ntp_time.strftime('%H:%M:%S.%f')[:-3]}")
+                    logger.info(f"  Local time:  {local_time.strftime('%H:%M:%S.%f')[:-3]}")
+                    logger.info(f"  Offset: {self.offset_ms:.2f}ms, Delay: {delay_ms:.2f}ms")
+
                     return self.offset_ms, delay_ms
                 except Exception as e:
-                    logger.warning(f"NTP sync attempt {attempt + 1} failed with {server}: {e}")
                     if attempt < self.max_retries - 1:
-                        time.sleep(1)  # Wait 1 second before retry
+                        logger.warning(f"NTP sync attempt {attempt + 1} failed with {server}: {e}")
+                        time.sleep(1)
                     continue
 
-        # If all servers fail, use system time (no offset)
-        logger.error("All NTP servers failed. Using system time without offset.")
-        self.offset_ms = 0
-        self.last_sync_time = time.time()
-        return 0, 0
+        logger.error("❌ All NTP sync attempts failed")
+        return self.offset_ms, 0
 
-    def get_ntp_time_ms(self) -> float:
+    def get_ntp_time_ms(self) -> int:
         """Get current NTP-synchronized time in milliseconds"""
-        # Re-sync if needed
-        if time.time() - self.last_sync_time > self.sync_interval:
-            self.sync_time()
-        return (time.time() * 1000) - self.offset_ms
+        return int((time.time() * 1000) - self.offset_ms)
 
-    def force_sync_before_settlement(self, next_funding_time: int) -> bool:
-        """
-        Force NTP synchronization exactly 10 seconds before settlement
-        Returns True if sync was successful
-        """
-        current_time = self.get_ntp_time_ms()
-        sync_time = next_funding_time - 10000  # 10 seconds before settlement
-        if current_time >= sync_time - 1000 and current_time <= sync_time + 1000:  # Within 1 second window
-            logger.info(f"🕐 FORCING NTP SYNC 10 seconds before settlement...")
-            offset_ms, delay_ms = self.sync_time()
-            logger.info(f"✅ Pre-settlement NTP sync completed: offset={offset_ms:.2f}ms, delay={delay_ms:.2f}ms")
+    def force_sync_before_settlement(self, settlement_time_ms: int) -> bool:
+        """Force NTP sync before settlement with enhanced logging"""
+        try:
+            current_ntp_time = self.get_ntp_time_ms()
+            time_until_settlement = (settlement_time_ms - current_ntp_time) / 1000
+
+            logger.info(f"🕐 Forcing NTP sync ({time_until_settlement:.1f}s until settlement)")
+
+            offset, delay = self.sync_time()
+
+            # Log the time difference after sync
+            new_ntp_time = self.get_ntp_time_ms()
+            time_difference = new_ntp_time - current_ntp_time
+
+            logger.info(f"✅ Pre-settlement NTP sync completed")
+            logger.info(f"  Time adjustment: {time_difference:.2f}ms")
+            logger.info(f"  New time until settlement: {(settlement_time_ms - new_ntp_time) / 1000:.3f}s")
+
             return True
-        return False
+        except Exception as e:
+            logger.error(f"❌ Pre-settlement NTP sync failed: {e}")
+            return False
+
+    def should_resync(self) -> bool:
+        """Check if we should resync based on time elapsed"""
+        return (time.time() - self.last_sync_time) > self.sync_interval
+

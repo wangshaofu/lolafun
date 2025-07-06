@@ -47,7 +47,6 @@ def fetch_history_funding_rate(pair, start_time=None, end_time=None, limit=1000)
         start_time = batch_end_time  # Move to the next batch
 
         # Add a small delay to avoid rate limiting
-        time.sleep(0.1)
 
     return full_funding_rate_list
 
