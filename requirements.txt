@@ -1,5 +1,6 @@
 # Core Binance API connector
 binance-futures-connector==4.1.0
+python-binance==1.0.29
 
 # Data analysis and manipulation
 pandas==2.3.0
