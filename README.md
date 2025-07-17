@@ -200,7 +200,7 @@ python main.py
 1. **Monitor** funding rates across all USDT futures pairs
 2. **Identify** opportunities when funding rate ≤ -0.3% (configurable)
 3. **Schedule** trades for optimal execution timing
-4. **Execute** short positions 100ms after funding settlement
+4. **Execute** short positions after funding settlement
 5. **Manage** risk with automatic stop-loss and take-profit
 
 ### Execution Timeline

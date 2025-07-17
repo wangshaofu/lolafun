@@ -43,10 +43,15 @@ def fetch_history_funding_rate(pair, start_time=None, end_time=None, limit=1000)
             endTime=batch_end_time,
             limit=limit
         )
-        full_funding_rate_list.extend(funding_rate_list)
+
+        # Filter funding rates < 0
+        # filtered_list = [entery for entery in funding_rate_list if float(entery['fundingRate']) < 0]
+        # full_funding_rate_list.extend(filtered_list)
+        full_funding_rate_list.extend(funding_rate_list) 
         start_time = batch_end_time  # Move to the next batch
 
         # Add a small delay to avoid rate limiting
+        time.sleep(0.5)
 
     return full_funding_rate_list
 
@@ -71,7 +76,7 @@ def save_funding_rates_to_csv(symbol: str, funding_rates: list):
                 'symbol': entry['symbol'],
                 'fundingRate': entry['fundingRate'],
                 'fundingTime': entry['fundingTime'],
-                'fundingTimeReadable': datetime.utcfromtimestamp(entry['fundingTime'] // 1000).strftime(
+                'fundingTimeReadable': datetime.fromtimestamp(entry['fundingTime'] // 1000).strftime(
                     '%Y-%m-%d %H:%M:%S'),
                 'markPrice': entry['markPrice']
             })
@@ -88,8 +93,8 @@ if __name__ == "__main__":
         print(f"Fetching funding rates for {symbol}...")
         funding_rates = fetch_history_funding_rate(
             pair=symbol,
-            start_time='2025-01-01 00:00:00',
-            end_time='2025-03-01 00:00:00'
+            start_time='2020-01-01 00:00:00',
+            end_time='2025-07-15 00:00:00'
         )
         save_funding_rates_to_csv(symbol, funding_rates)
         time.sleep(0.33)
