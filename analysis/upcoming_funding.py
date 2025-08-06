@@ -26,15 +26,18 @@ def list_upcoming_funding(top_n=10):
         key=lambda x: int(x.get("nextFundingTime", 0))
     )
     
-    print(f"{'Symbol':<12} {'Next Funding Time (UTC)':<25} {'Local Time'}")
-    print("-" * 70)
+    print(f"{'Symbol':<12} {'Next Funding Time (UTC)':<25} {'Local Time':<20} {'Funding Rate':<14}")
+    print("-" * 90)
     for item in sorted_list[:top_n]:
         symbol = item["symbol"]
         nft_ms = int(item["nextFundingTime"])
+        funding_rate = item.get("lastFundingRate", None)
         # 轉為 UTC datetime，再轉成本地時區
         dt_utc = datetime.fromtimestamp(nft_ms/1000, tz=timezone.utc)
         dt_local = dt_utc.astimezone()  # 預設轉成本機時區
-        print(f"{symbol:<12} {dt_utc.strftime('%Y-%m-%d %H:%M:%S'):<25} {dt_local.strftime('%Y-%m-%d %H:%M:%S')}")
+        # Funding rate 可能為 None
+        funding_rate_str = f"{float(funding_rate):.6f}" if funding_rate is not None else "N/A"
+        print(f"{symbol:<12} {dt_utc.strftime('%Y-%m-%d %H:%M:%S'):<25} {dt_local.strftime('%Y-%m-%d %H:%M:%S'):<20} {funding_rate_str:<14}")
 
 if __name__ == "__main__":
     # 參數 top_n 可自由調整要列出的數量
