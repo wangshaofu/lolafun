@@ -3,6 +3,7 @@
 '''
 list top N upcoming funding rates from Binance USDT-M Futures.
 This script fetches the next funding times for all symbols and lists the top N
+
 '''
 
 import requests

@@ -1,3 +1,4 @@
+# TODO: s --> ms and find the negative funding rate
 import asyncio
 import json
 import logging
@@ -24,6 +25,11 @@ AGGTRADE_FMT = "{}@aggTrade"             # 即時成交量 stream
 BOOKTICKER_FMT = "{}@bookTicker"          # 最佳買一/賣一（主要心跳）
 
 SAFETY_MARGIN = 1.0            # extra slack (s) on top of dynamic 2*OWD
+
+# Guard-window policy
+TARGET_GUARD_ONLY = True   # True: 只以目標幣的 T 開窗（建議）。False: 任何幣進入其 T 皆視為守門窗啟動。
+CANARY_REQUIRE_OVERLAP = False  # True: 只有當金絲雀也落在自己的 T 守門窗才算同步；False: 只要在目標幣守門窗同秒內出現異常即算同步。
+
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("FW-Heartbeat")
@@ -131,12 +137,35 @@ async def monitor_funding():
                     if ft is not None:
                         in_guard = (ft - GUARD_PRE) <= now_server < (ft + GUARD_POST)
 
+                    # 目標幣的守門窗（用於 canary 同步判定時的錨）
+                    target_guard = False
+                    if sym in TARGET_SET and funding_time.get(sym) is not None:
+                        tft = funding_time[sym]
+                        target_guard = (tft - GUARD_PRE) <= now_server < (tft + GUARD_POST)
+
                     # 主要依據：bookTicker 是否凍結
                     if bkt_gap > thresh:
                         # 判斷多訊號一致性（bookTicker + aggTrade 同凍結）
                         dual = trd_gap > thresh
                         # 若是目標幣，且有任一金絲雀同步凍結，提升信心
-                        canary_sync = bool(CANARY_SET & frozen_bkt) and (sym in TARGET_SET)
+                        canary_sync = False
+                        if sym in TARGET_SET and target_guard:
+                            # 當前在目標幣守門窗內，檢查金絲雀是否同秒出現異常
+                            for c in CANARY_SET:
+                                if c not in last_bkt_ts:
+                                    continue
+                                c_freeze = (now_local - last_bkt_ts[c]) > thresh
+                                if not c_freeze:
+                                    continue
+                                if CANARY_REQUIRE_OVERLAP:
+                                    cft = funding_time.get(c)
+                                    c_guard = False
+                                    if cft is not None:
+                                        c_guard = (cft - GUARD_PRE) <= now_server < (cft + GUARD_POST)
+                                    if not c_guard:
+                                        continue
+                                canary_sync = True
+                                break
 
                         level = "LOW"
                         if in_guard and dual and canary_sync:
@@ -178,7 +207,18 @@ async def monitor_funding():
         async def send_ping():
             nonlocal last_pong_ts
             while True:
-                await asyncio.sleep(10)
+                now_s = server_now()
+                guard_active = False
+                items = funding_time.items()
+                if TARGET_GUARD_ONLY:
+                    items = ((s, ft) for s, ft in funding_time.items() if s in TARGET_SET)
+                for sym, ft in items:
+                    if ft is None:
+                        continue
+                    if (ft - 7) <= now_s < (ft + 5):
+                        guard_active = True
+                        break
+                await asyncio.sleep(1 if guard_active else 10)
                 try:
                     t0 = time.time()
                     pong_waiter = await ws.ping()
