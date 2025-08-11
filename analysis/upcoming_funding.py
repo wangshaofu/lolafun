@@ -1,9 +1,44 @@
+import sys
+import json
+try:
+    import websocket
+except ImportError:
+    websocket = None
+# WebSocket 取得所有合約 funding rate
+def run_funding_rate_websocket():
+    if websocket is None:
+        print("請先安裝 websocket-client：pip install websocket-client")
+        return
+    def on_message(ws, message):
+        data = json.loads(message)
+        for item in data:
+            symbol = item['s']
+            funding_rate = float(item['r'])
+            next_funding_time = int(item['T'])
+            dt_utc = datetime.fromtimestamp(next_funding_time/1000, tz=timezone.utc)
+            print(f"{symbol:<12} funding_rate={funding_rate:>+9.6f} next_funding_time={dt_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        print('-' * 80)
+    def on_error(ws, error):
+        print("WebSocket error:", error)
+    def on_close(ws, close_status_code, close_msg):
+        print("WebSocket closed")
+    def on_open(ws):
+        print("WebSocket connection opened")
+    ws_url = "wss://fstream.binance.com/ws/!markPrice@arr"
+    ws = websocket.WebSocketApp(
+        ws_url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    ws.run_forever()
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 '''
 list top N upcoming funding rates from Binance USDT-M Futures.
 This script fetches the next funding times for all symbols and lists the top N
-
 '''
 
 import requests
@@ -13,85 +48,79 @@ import time
 import statistics
 
 # Binance USDT-M Futures Premium Index endpoint
-API_URL = "https://fapi.binance.com/fapi/v1/premiumIndex"
 
-# Binance USDT-M Futures Kline endpoint
-KLINE_URL = "https://fapi.binance.com/fapi/v1/klines"
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+'''
+即時取得 Binance USDT-M Futures 全部合約的 funding rate（WebSocket 版）
+並即時顯示 funding rate 最負與最正的標的
+'''
 
-def fetch_premium_index():
-    """向 Binance 取得所有期貨標的的 funding 資訊。"""
-    resp = requests.get(API_URL, timeout=5)
-    resp.raise_for_status()
-    return resp.json()
+import websocket
+import json
+from datetime import datetime, timezone
+import threading
+import time
 
-def fetch_last_hour_volumes(symbol):
-    """抓取指定 symbol 過去 1 小時的 1m K 線成交量 (volume)。"""
-    # 取得今天 00:00:00 UTC 的 timestamp (ms)
-    now = datetime.now(timezone.utc)
-    today_utc = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    start_time = int(today_utc.timestamp() * 1000)
-    end_time = int(time.time() * 1000)
-    params = {
-        "symbol": symbol,
-        "interval": "1m",
-        "startTime": start_time,
-        "endTime": end_time,
-        "limit": 1440  # 一天最多 1440 筆
-    }
-    resp = requests.get(KLINE_URL, params=params, timeout=5)
-    resp.raise_for_status()
-    klines = resp.json()
-    # volume 在 index 5，需轉 float
-    volumes = [float(k[5]) for k in klines]
-    # 只取最近 60 筆
-    return volumes[-60:] if len(volumes) >= 60 else volumes
+def on_message(ws, message):
+    data = json.loads(message)
+    # data 是 list，每個元素是一個 symbol 的 mark price/funding rate
+    if not isinstance(data, list):
+        return
+    # 建立 symbol -> 資料 dict
+    symbol_map = {item['s']: item for item in data if 'r' in item}
+    # 只顯示一次最正極與最負的 funding rate（各一個）
+    import pytz
+    tz_taipei = pytz.timezone('Asia/Taipei')
+    now_dt = datetime.now(timezone.utc)
+    now_taipei = now_dt.astimezone(tz_taipei)
+    now_str = now_taipei.strftime('%Y-%m-%d %H:%M:%S 台灣時間')
+    sorted_by_rate = sorted(symbol_map.values(), key=lambda x: float(x['r']))
+    most_positive = sorted_by_rate[-1]
+    most_negative = sorted_by_rate[0]
+    print(f"[{now_str}]\nMost Positive Funding Rate:")
+    pos_time = datetime.fromtimestamp(int(most_positive['T'])/1000, tz=timezone.utc).astimezone(tz_taipei)
+    print(f"  {most_positive['s']:<12} funding_rate={float(most_positive['r']):+9.6f} next_funding_time={pos_time.strftime('%Y-%m-%d %H:%M:%S 台灣時間')}")
+    print('-' * 80)
+    print(f"Most Negative Funding Rate:")
+    neg_time = datetime.fromtimestamp(int(most_negative['T'])/1000, tz=timezone.utc).astimezone(tz_taipei)
+    print(f"  {most_negative['s']:<12} funding_rate={float(most_negative['r']):+9.6f} next_funding_time={neg_time.strftime('%Y-%m-%d %H:%M:%S 台灣時間')}")
+    print('-' * 80)
 
-def list_upcoming_funding(top_n=10):
-    """列出最先要結算 funding rate 的前 N 檔交易對。"""
-    data = fetch_premium_index()
-    # 將 nextFundingTime 由 ms 轉成整數，並排序
-    # 過濾掉 nextFundingTime 為 0 的 symbol
-    filtered = [x for x in data if int(x.get("nextFundingTime", 0)) > 0]
-    sorted_list = sorted(
-        filtered,
-        key=lambda x: int(x.get("nextFundingTime", 0))
-    )
-    
-    print(f"{'Symbol':<12} {'Next Funding Time (UTC)':<25} {'Local Time':<20} {'Funding Rate':<14} {'1h Avg Vol':<14} {'1h Vol Std':<14} {'Nonzero':<8} {'Std/Avg':<8}")
-    print("-" * 150)
-    stats_list = []
-    for item in sorted_list:
-        symbol = item["symbol"]
-        nft_ms = int(item["nextFundingTime"])
-        funding_rate = item.get("lastFundingRate", None)
-        dt_utc = datetime.fromtimestamp(nft_ms/1000, tz=timezone.utc)
-        dt_local = dt_utc.astimezone()
-        funding_rate_str = f"{float(funding_rate):.6f}" if funding_rate is not None else "N/A"
-        try:
-            volumes = fetch_last_hour_volumes(symbol)
-            avg_vol = statistics.mean(volumes) if volumes else 0
-            std_vol = statistics.stdev(volumes) if len(volumes) > 1 else 0
-            nonzero_count = sum(1 for v in volumes if v > 0)
-            std_avg_ratio = std_vol / avg_vol if avg_vol > 0 else 0
-        except Exception as e:
-            avg_vol = std_vol = std_avg_ratio = nonzero_count = 0
-        stats_list.append({
-            "symbol": symbol,
-            "dt_utc": dt_utc,
-            "dt_local": dt_local,
-            "funding_rate_str": funding_rate_str,
-            "avg_vol": avg_vol,
-            "std_vol": std_vol,
-            "nonzero_count": nonzero_count,
-            "std_avg_ratio": std_avg_ratio
-        })
+    # 列出六小時內即將結算的幣種，只顯示前三個，時間顯示台灣時間
+    six_hours_ms = 6 * 60 * 60 * 1000
+    upcoming = [item for item in symbol_map.values() if 0 <= int(item['T']) - int(now_dt.timestamp() * 1000) <= six_hours_ms]
+    upcoming_sorted = sorted(upcoming, key=lambda x: int(x['T']))[:3]
+    if upcoming_sorted:
+        print(f"Upcoming settlements within 6 hours (Top 3):")
+        for item in upcoming_sorted:
+            symbol = item['s']
+            funding_rate = float(item['r'])
+            next_funding_time = int(item['T'])
+            dt_taipei = datetime.fromtimestamp(next_funding_time/1000, tz=timezone.utc).astimezone(tz_taipei)
+            mins_left = int((next_funding_time - int(now_dt.timestamp() * 1000)) / 60000)
+            print(f"{symbol:<12} funding_rate={funding_rate:+9.6f} next_funding_time={dt_taipei.strftime('%Y-%m-%d %H:%M:%S 台灣時間')} (還有 {mins_left} 分鐘)")
+        print('-' * 80)
+    else:
+        print("No settlements within 6 hours.")
+        print('-' * 80)
 
-    # 依流動性排序：nonzero_count多 > std/avg小 > avg_vol大
-    stats_list.sort(key=lambda x: (-x["nonzero_count"], x["std_avg_ratio"], -x["avg_vol"]))
+def on_error(ws, error):
+    print("WebSocket error:", error)
 
-    for s in stats_list[:top_n]:
-        print(f"{s['symbol']:<12} {s['dt_utc'].strftime('%Y-%m-%d %H:%M:%S'):<25} {s['dt_local'].strftime('%Y-%m-%d %H:%M:%S'):<20} {s['funding_rate_str']:<14} {s['avg_vol']:<14.2f} {s['std_vol']:<14.2f} {s['nonzero_count']:<8} {s['std_avg_ratio']:<8.2f}")
+def on_close(ws, close_status_code, close_msg):
+    print("WebSocket closed")
+
+def on_open(ws):
+    print("WebSocket connection opened")
 
 if __name__ == "__main__":
-    # 參數 top_n 可自由調整要列出的數量
-    list_upcoming_funding(top_n=10)
+    ws_url = "wss://fstream.binance.com/ws/!markPrice@arr"
+    ws = websocket.WebSocketApp(
+        ws_url,
+        on_open=on_open,
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    ws.run_forever()
