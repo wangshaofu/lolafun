@@ -9,13 +9,24 @@ from datetime import datetime
 import statistics
 import sys
 import os
+import argparse
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.ntp_sync import NTPTimeSync
 
-# Binance USDT-M Mark Price WebSocket 多流
+
+# 解析命令列參數
+parser = argparse.ArgumentParser(description="Binance Funding Monitor")
+parser.add_argument('--symbols', type=str, default=None, help='以逗號分隔的幣種列表，例如 BTCUSDT,ETHUSDT')
+args, unknown = parser.parse_known_args()
+
+# 預設目標幣種
+DEFAULT_SYMBOLS_TARGET = ["FUNUSDT"]
+if args.symbols:
+    SYMBOLS_TARGET = [s.strip().upper() for s in args.symbols.split(',') if s.strip()]
+else:
+    SYMBOLS_TARGET = DEFAULT_SYMBOLS_TARGET
 
 BINANCE_WS = "wss://fstream.binance.com/stream?streams="
-SYMBOLS_TARGET = ["FUNUSDT"]                 # 目標幣種（可自行調整）
 SYMBOLS = [s.lower() for s in SYMBOLS_TARGET]
 TARGET_SET = set([s.lower() for s in SYMBOLS_TARGET])
 
@@ -94,13 +105,14 @@ async def monitor_funding():
     # 只組合目標幣 bookTicker stream
     streams = [BOOKTICKER_FMT.format(s) for s in SYMBOLS]
     url = BINANCE_WS + "/".join(streams)
-
+    
+    logger.info(f"Target Symbol : {SYMBOLS_TARGET}")
     last_bkt_ts = {s: time.time() for s in SYMBOLS}  # 每幣種 bookTicker 最近到達時間（epoch 秒）
     downtime_start = {s: None for s in SYMBOLS}      # 每幣種停機起點
     last_msg_ts = time.time()
 
     async with websockets.connect(url, ping_interval=None) as ws:
-        logger.info("WebSocket 已連線，開始監聽…")
+        logger.info("WebSocket connected, listening…")
 
         last_pong_ts = time.time()
 
