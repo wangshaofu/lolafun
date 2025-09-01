@@ -22,6 +22,7 @@ cryptography==42.0.0
 
 # WebSocket support
 websocket-client==1.8.0
+matplotlib==3.9.0
 
 # SSL certificate handling
 certifi==2025.6.15

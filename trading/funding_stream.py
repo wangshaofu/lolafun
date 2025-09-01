@@ -8,6 +8,7 @@ Uses individual symbol mark price streams for better reliability.
 import asyncio
 import json
 import logging
+import time
 import websockets
 from typing import Dict, List, Optional, Callable
 from datetime import datetime
@@ -126,14 +127,27 @@ class FundingRateStream:
                     symbol = stream_data['s']
                     funding_rate = float(stream_data['r'])
                     mark_price = float(stream_data['p'])
+                    # Binance fields:
+                    #   E: event time (ms), T: next funding time (ms)
+                    event_time = int(stream_data.get('E', int(time.time() * 1000)))
+                    next_funding_time = int(stream_data.get('T')) if 'T' in stream_data else None
 
                     # Store funding data
                     self.funding_data[symbol] = {
                         'symbol': symbol,
                         'markPrice': mark_price,
                         'lastFundingRate': funding_rate,
-                        'time': stream_data.get('T', int(datetime.now().timestamp() * 1000))
+                        'eventTime': event_time,
+                        'nextFundingTime': next_funding_time,
+                        'updateTimestamp': time.time(),
                     }
+
+                    # Allow a precision manager to learn from mark prices
+                    if self.precision_manager is not None:
+                        try:
+                            self.precision_manager.extract_precision_from_websocket(symbol, mark_price)
+                        except Exception:
+                            pass
 
                     # Track if this is a negative funding rate
                     if funding_rate <= self.funding_threshold:

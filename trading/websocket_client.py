@@ -177,6 +177,52 @@ class WebSocketTradingClient:
             logger.error(f"Error placing market order: {e}")
             return None
 
+    async def place_post_only_limit_order(self, symbol: str, side: str, quantity: float, price: float, position_side: Optional[str] = None) -> Optional[dict]:
+        """Place a Post-Only LIMIT order (maker) using timeInForce=GTX."""
+        try:
+            current_time = int(self.ntp_sync.get_ntp_time_ms())
+            formatted_quantity = self.precision_manager.format_quantity(symbol, quantity)
+            formatted_price = self.precision_manager.format_price(symbol, price)
+
+            # Derive position side if not provided (Hedge mode semantics)
+            if position_side is None:
+                position_side = "LONG" if side.upper() == "BUY" else "SHORT"
+
+            params = {
+                "apiKey": self.api_key,
+                "symbol": symbol.upper(),
+                "side": side.upper(),
+                "type": "LIMIT",
+                "timeInForce": "GTX",  # Post-Only
+                "quantity": formatted_quantity,
+                "price": formatted_price,
+                "positionSide": position_side,
+                "timestamp": current_time,
+                "recvWindow": 5000
+            }
+
+            params["signature"] = self.generate_signature(params)
+            request_id = str(uuid.uuid4())
+            order_request = {
+                "id": request_id,
+                "method": "order.place",
+                "params": params
+            }
+
+            response_data = await self.send_order_request(order_request)
+            if response_data and response_data.get("status") == 200:
+                result = response_data.get("result", {})
+                logger.info(
+                    f"✅ Post-only LIMIT {side} placed: {formatted_quantity} {symbol} @ {formatted_price}"
+                )
+                return result
+            else:
+                logger.error(f"❌ Post-only LIMIT order failed: {response_data}")
+                return None
+        except Exception as e:
+            logger.error(f"Error placing post-only limit order: {e}")
+            return None
+
     async def place_stop_loss_order(self, symbol: str, quantity: float, stop_price: float) -> Optional[dict]:
         """Place a stop loss order"""
         try:
