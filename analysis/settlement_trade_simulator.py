@@ -2,19 +2,46 @@
 """
 Settlement Trade Simulator (maker-first)
 
-Goals:
-- Detect the true settlement moment using Binance server-aligned time.
-- Measure whether the largest latency and largest price move happen within 2s post-settlement.
-- Simulate a post-settlement maker order (post-only LIMIT) and estimate if it would be touched/filled quickly.
+Mini README
+- Purpose: Collect Binance Futures bookTicker ticks around funding settlement, align to server time, and simulate a post-settlement maker entry with configurable exit horizons to estimate fill probability, latency, and net PnL after fees/slippage.
 
-Notes:
-- Uses bookTicker for sub-second price and spread around settlement.
-- Uses /fapi/v1/premiumIndex to fetch nextFundingTime and lastFundingRate.
-- Aligns to Binance server time and NTP to reduce local clock bias.
+- Quick Usage:
+  1) Auto-pick extremes by funding (both sides, continuous):
+     python analysis/settlement_trade_simulator.py --pick both --write-raw
 
-Outputs:
-- CSV per run at analysis/logs/settlement_sim_results.csv
-- Optional per-settlement raw ticks CSV at analysis/logs/bookticker/records_<symbol>_<funding_ts>.csv
+  2) Run a fixed symbol list (one-off run per symbol):
+     python analysis/settlement_trade_simulator.py --symbols JELLYJELLYUSDT,MUSDT --write-raw \
+         --peak-window 2 --exit-windows 2,10 --taker-fee-bps 4 --slippage-bps-exit 0
+
+- Key Arguments:
+  --symbols: Comma-separated symbols to run once; omit to auto-pick extremes.
+  --pick:    Auto-pick mode among {pos, neg, both, abs}; default both.
+  --min-quote-volume: 24h quoteVolume threshold for auto-pick (default 15,000,000).
+  --start-before / --window-pre / --window-post: Capture windows around settlement (60 / 15 / 15s default).
+  --peak-window: Seconds for the “2s window” style metrics and maker fill check (default 2).
+  --exit-windows: Comma list of horizons in seconds for PnL, e.g. 1,2,10 (default 2,10).
+  --maker-fee-bps / --taker-fee-bps / --slippage-bps-exit: Costs modeling (defaults 0 / 4 / 0 bps).
+  --write-raw: If set, writes per-event raw bookTicker CSV for later inspection.
+
+- Outputs:
+  1) Aggregated CSV: analysis/logs/settlement_sim_results.csv
+     Columns include funding info, pre/mid prices, amplitude within 2s/10s, max latencies, maker side & price,
+     whether filled within peak window, and for each exit window the exit price and net PnL% (if a fill occurred).
+
+  2) Raw ticks (optional): analysis/logs/bookticker/records_<symbol>_<funding_ts>.csv
+     Columns: recv_ts,event_ts_ms,update_id,bid,ask (server-aligned receive time).
+
+- Mechanics Summary:
+  - Direction: lastFundingRate < 0 => SELL at ask0, else BUY at bid0, immediately after settlement tick.
+  - Fill check: Within --peak-window, best-opposite quote must touch the maker price to be considered filled.
+  - Exit/PnL: At each --exit-windows timestamp, exit via market (taker) with fee and optional slippage applied.
+  - Latency & Amplitude: Records max one-way latency (event_ts -> receive_ts) and price amplitudes post-settlement.
+
+- Notes:
+  - Requires network access to Binance endpoints and WebSocket stream.
+  - NTP/server-time alignment is attempted to reduce local clock skew.
+  - If “maker_filled_2s” (or appropriate peak-window) is false, exit fields for that row are left blank.
+  - Adjust --min-quote-volume and symbol selection to avoid illiquid tails.
 """
 
 import asyncio
