@@ -19,6 +19,7 @@ Mini README
   --min-quote-volume: 24h quoteVolume threshold for auto-pick (default 15,000,000).
   --start-before / --window-pre / --window-post: Capture windows around settlement (60 / 15 / 15s default).
   --peak-window: Seconds for the “2s window” style metrics and maker fill check (default 2).
+  --entry-latency-ms: Minimum post-settlement latency to trigger taker entry (default 50 ms).
   --exit-windows: Comma list of horizons in seconds for PnL, e.g. 1,2,10 (default 2,10).
   --maker-fee-bps / --taker-fee-bps / --slippage-bps-exit: Costs modeling (defaults 0 / 4 / 0 bps).
   --write-raw: If set, writes per-event raw bookTicker CSV for later inspection.
@@ -32,8 +33,9 @@ Mini README
      Columns: recv_ts,event_ts_ms,update_id,bid,ask (server-aligned receive time).
 
 - Mechanics Summary:
-  - Direction: lastFundingRate < 0 => SELL at ask0, else BUY at bid0, immediately after settlement tick.
-  - Fill check: Within --peak-window, best-opposite quote must touch the maker price to be considered filled.
+  - Direction: lastFundingRate < 0 => short via taker (hit bid); else long via taker (hit ask).
+  - Entry trigger: wait until a post-settlement tick shows latency >= --entry-latency-ms, then execute the taker entry.
+  - Fill check: `maker_filled_2s` now reflects whether the latency trigger was hit; price-drop statistics remain unchanged.
   - Exit/PnL: At each --exit-windows timestamp, exit via market (taker) with fee and optional slippage applied.
   - Latency & Amplitude: Records max one-way latency (event_ts -> receive_ts) and price amplitudes post-settlement.
 
@@ -190,6 +192,7 @@ def analyze_post_settlement(
     maker_fee_bps: float = 0.0,
     taker_fee_bps: float = 4.0,
     exit_slippage_bps: float = 0.0,
+    latency_entry_ms: float = 50.0,
 ) -> dict:
     """Compute latency and price-reaction metrics around settlement."""
     if not records:
@@ -235,19 +238,25 @@ def analyze_post_settlement(
     max_lat_2s = max((latency_ms[i] for i in within_2s_idx), default=0.0)
     is_max_latency_in_2s = (abs(max_lat_2s - max_lat_all) < 1e-6) if post_latency else False
 
-    # Maker simulation: after settlement, place SELL at ask0 if funding < 0 else BUY at bid0
+    # Entry: wait for post-settlement latency to cross the configured threshold, then hit market
     side = 'SELL' if last_funding_rate < 0 else 'BUY'
-    ask0 = asks[first_post]
-    bid0 = bids[first_post]
-    if side == 'SELL':
-        sim_price = ask0
-        # Approximate fill if best bid touches our ask within the window
-        max_bid_2s = max((bids[i] for i in post_window_idx), default=bid0)
-        filled_2s = max_bid_2s >= sim_price
+    entry_idx: Optional[int] = None
+    entry_latency_ms: Optional[float] = None
+    for idx in post_idx:
+        if latency_ms[idx] >= latency_entry_ms:
+            entry_idx = idx
+            entry_latency_ms = latency_ms[idx]
+            break
+
+    entry_triggered = entry_idx is not None
+    if entry_triggered:
+        if side == 'SELL':
+            entry_price = bids[entry_idx]
+        else:
+            entry_price = asks[entry_idx]
     else:
-        sim_price = bid0
-        min_ask_2s = min((asks[i] for i in post_window_idx), default=ask0)
-        filled_2s = min_ask_2s <= sim_price
+        # Fallback to first post tick for reporting; exits will be blank if trigger not met
+        entry_price = bids[first_post] if side == 'SELL' else asks[first_post]
 
     # Exit/PnL backtest
     if exit_windows_s is None:
@@ -261,16 +270,17 @@ def analyze_post_settlement(
         return None
 
     # Effective prices with fees and slippage
-    m_fee = maker_fee_bps / 10000.0
     t_fee = taker_fee_bps / 10000.0
     s_exit = exit_slippage_bps / 10000.0
 
-    # Entry effective price (includes maker fee if any)
-    entry_price = sim_price
-    if side == 'BUY':
-        entry_eff = entry_price * (1.0 + m_fee)
-    else:  # SELL entry
-        entry_eff = entry_price * (1.0 - m_fee)
+    # Entry effective price (includes taker fee hit)
+    if entry_triggered:
+        if side == 'BUY':
+            entry_eff = entry_price * (1.0 + t_fee)
+        else:
+            entry_eff = entry_price * (1.0 - t_fee)
+    else:
+        entry_eff = None
 
     # Compute exit price and net returns for each window
     pnl_by_window: Dict[float, Optional[float]] = {}
@@ -280,6 +290,11 @@ def analyze_post_settlement(
         if i_exit is None:
             pnl_by_window[w] = None
             exit_price_by_window[w] = None
+            continue
+
+        if not entry_triggered or entry_eff is None:
+            exit_price_by_window[w] = None
+            pnl_by_window[w] = None
             continue
 
         if side == 'BUY':
@@ -311,8 +326,9 @@ def analyze_post_settlement(
         'max_latency_ms_2s': max_lat_2s,
         'is_max_latency_in_2s': is_max_latency_in_2s,
         'maker_side': side,
-        'maker_sim_price': sim_price,
-        'maker_filled_within_2s': filled_2s,
+        'maker_sim_price': entry_price,
+        'maker_filled_within_2s': entry_triggered,
+        'entry_latency_ms': entry_latency_ms,
         # PnL related
         'entry_eff_price': entry_eff,
         'exit_slippage_bps': exit_slippage_bps,
@@ -434,6 +450,7 @@ async def _watch_loop(side: str, args):
                 maker_fee_bps=float(getattr(args, 'maker_fee_bps', 0.0)),
                 taker_fee_bps=float(getattr(args, 'taker_fee_bps', 4.0)),
                 exit_slippage_bps=float(getattr(args, 'slippage_bps_exit', 0.0)),
+                latency_entry_ms=float(getattr(args, 'entry_latency_ms', 50.0)),
             )
             if not metrics:
                 logger.warning(f"{sym} 沒有足夠資料可供分析，繼續下一輪…")
@@ -448,7 +465,7 @@ async def _watch_loop(side: str, args):
                 base_cols = [
                     'timestamp_utc','symbol','funding_time','lastFundingRate','pre_mid','mid_at_t0',
                     'max_up_2s_pct','min_dn_2s_pct','amp_2s_pct','amp_10s_pct',
-                    'max_latency_ms_post','max_latency_ms_2s','is_max_latency_in_2s',
+                    'max_latency_ms_post','max_latency_ms_2s','entry_latency_ms','is_max_latency_in_2s',
                     'maker_side','maker_sim_price','maker_filled_2s',
                     'maker_fee_bps','taker_fee_bps','exit_slippage_bps','entry_eff_price'
                 ]
@@ -475,6 +492,7 @@ async def _watch_loop(side: str, args):
                 f"{metrics['amp_10s_pct']:.6f}",
                 f"{metrics['max_latency_ms_post']:.1f}",
                 f"{metrics['max_latency_ms_2s']:.1f}",
+                f"{metrics['entry_latency_ms']:.1f}" if metrics.get('entry_latency_ms') is not None else "",
                 str(int(metrics['is_max_latency_in_2s'])),
                 metrics['maker_side'],
                 f"{metrics['maker_sim_price']:.8f}",
@@ -482,7 +500,7 @@ async def _watch_loop(side: str, args):
                 f"{metrics['maker_fee_bps']:.2f}",
                 f"{metrics['taker_fee_bps']:.2f}",
                 f"{metrics['exit_slippage_bps']:.2f}",
-                f"{metrics['entry_eff_price']:.8f}",
+                f"{metrics['entry_eff_price']:.8f}" if metrics.get('entry_eff_price') is not None else "",
             ]
             # Dynamic exit fields
             for w in exit_windows:
@@ -518,6 +536,7 @@ async def main():
     parser.add_argument('--window-pre', type=float, default=15.0, help='seconds to keep before settlement')
     parser.add_argument('--window-post', type=float, default=15.0, help='seconds to keep after settlement')
     parser.add_argument('--peak-window', type=float, default=2.0, help='post-settlement window to test peak (seconds)')
+    parser.add_argument('--entry-latency-ms', type=float, default=50.0, help='latency threshold (ms) after settlement to trigger taker entry')
     parser.add_argument('--write-raw', action='store_true', help='write raw bookTicker ticks to CSV')
     # Fees & slippage & exit
     parser.add_argument('--maker-fee-bps', type=float, default=0.0, help='maker fee in bps (default 0)')
@@ -536,7 +555,7 @@ async def main():
             base_cols = [
                 'timestamp_utc','symbol','funding_time','lastFundingRate','pre_mid','mid_at_t0',
                 'max_up_2s_pct','min_dn_2s_pct','amp_2s_pct','amp_10s_pct',
-                'max_latency_ms_post','max_latency_ms_2s','is_max_latency_in_2s',
+                'max_latency_ms_post','max_latency_ms_2s','entry_latency_ms','is_max_latency_in_2s',
                 'maker_side','maker_sim_price','maker_filled_2s',
                 'maker_fee_bps','taker_fee_bps','exit_slippage_bps','entry_eff_price'
             ]
@@ -575,6 +594,7 @@ async def main():
                     maker_fee_bps=float(args.maker_fee_bps),
                     taker_fee_bps=float(args.taker_fee_bps),
                     exit_slippage_bps=float(args.slippage_bps_exit),
+                    latency_entry_ms=float(args.entry_latency_ms),
                 )
                 if not metrics:
                     logger.warning(f"{sym} 沒有足夠資料可供分析")
@@ -595,6 +615,7 @@ async def main():
                     f"{metrics['amp_10s_pct']:.6f}",
                     f"{metrics['max_latency_ms_post']:.1f}",
                     f"{metrics['max_latency_ms_2s']:.1f}",
+                    f"{metrics['entry_latency_ms']:.1f}" if metrics.get('entry_latency_ms') is not None else "",
                     str(int(metrics['is_max_latency_in_2s'])),
                     metrics['maker_side'],
                     f"{metrics['maker_sim_price']:.8f}",
@@ -602,7 +623,7 @@ async def main():
                     f"{metrics['maker_fee_bps']:.2f}",
                     f"{metrics['taker_fee_bps']:.2f}",
                     f"{metrics['exit_slippage_bps']:.2f}",
-                    f"{metrics['entry_eff_price']:.8f}",
+                    f"{metrics['entry_eff_price']:.8f}" if metrics.get('entry_eff_price') is not None else "",
                 ]
                 for w in exit_windows:
                     ex_price = metrics['exit_price_by_window'].get(w)
