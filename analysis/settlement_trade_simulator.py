@@ -11,7 +11,7 @@ Mini README
 
   2) Run a fixed symbol list (one-off run per symbol):
      python analysis/settlement_trade_simulator.py --symbols JELLYJELLYUSDT,MUSDT --write-raw \
-         --peak-window 2 --exit-windows 2,10 --taker-fee-bps 4 --slippage-bps-exit 0
+         --peak-window 2 --exit-windows 2,10 --taker-fee-bps 2.75 --slippage-bps-exit 0
 
 - Key Arguments:
   --symbols: Comma-separated symbols to run once; omit to auto-pick extremes.
@@ -21,7 +21,7 @@ Mini README
   --peak-window: Seconds for the “2s window” style metrics and maker fill check (default 2).
   --entry-latency-ms: Minimum post-settlement latency to trigger taker entry (default 50 ms).
   --exit-windows: Comma list of horizons in seconds for PnL, e.g. 1,2,10 (default 2,10).
-  --maker-fee-bps / --taker-fee-bps / --slippage-bps-exit: Costs modeling (defaults 0 / 4 / 0 bps).
+  --maker-fee-bps / --taker-fee-bps / --slippage-bps-exit: Costs modeling (defaults 0 / 2.75 / 0 bps).
   --write-raw: If set, writes per-event raw bookTicker CSV for later inspection.
 
 - Outputs:
@@ -34,7 +34,7 @@ Mini README
 
 - Mechanics Summary:
   - Direction: lastFundingRate < 0 => short via taker (hit bid); else long via taker (hit ask).
-  - Entry trigger: wait until a post-settlement tick shows latency >= --entry-latency-ms, then execute the taker entry.
+  - Entry trigger: estimate a pre-settlement latency baseline and enter when a post-settlement tick exceeds baseline × --latency-spike-multiplier (falling back to --entry-latency-ms if needed).
   - Fill check: `maker_filled_2s` now reflects whether the latency trigger was hit; price-drop statistics remain unchanged.
   - Exit/PnL: At each --exit-windows timestamp, exit via market (taker) with fee and optional slippage applied.
   - Latency & Amplitude: Records max one-way latency (event_ts -> receive_ts) and price amplitudes post-settlement.
@@ -49,6 +49,7 @@ Mini README
 import asyncio
 import json
 import logging
+import statistics
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -106,6 +107,26 @@ async def fetch_server_time_offset(session: aiohttp.ClientSession) -> Optional[f
 
 def server_now(server_offset_s: float) -> float:
     return time.time() + server_offset_s
+
+
+def detect_latency_spike_threshold(
+    current_latency_ms: float,
+    latency_baseline: float,
+    spike_multiplier: float = 2.0,
+) -> bool:
+    """
+    閾值突破檢測：當前延遲超過基線 * 倍數即判定為峰值。
+    """
+    threshold = latency_baseline * spike_multiplier
+    is_spike = current_latency_ms > threshold
+
+    if is_spike:
+        logger.info(
+            f"⚡ 峰值觸發: {current_latency_ms:.1f}ms > {threshold:.1f}ms "
+            f"(baseline {latency_baseline:.1f}ms × {spike_multiplier:.2f})"
+        )
+
+    return is_spike
 
 
 async def collect_bookticker(symbol: str,
@@ -190,8 +211,9 @@ def analyze_post_settlement(
     last_funding_rate: float,
     peak_window_s: float = 2.0,
     maker_fee_bps: float = 0.0,
-    taker_fee_bps: float = 4.0,
+    taker_fee_bps: float = 2.75,
     latency_entry_ms: float = 50.0,
+    latency_spike_multiplier: float = 2.0,
     leverage_list: List[int] = [5, 10, 15, 20, 25],  # 新增槓桿列表
 ) -> dict:
     """Compute latency and price-reaction metrics with limit order simulation and leverage testing."""
@@ -226,6 +248,13 @@ def analyze_post_settlement(
     amp_2s = max(abs(pct(max_up_2s)), abs(pct(min_dn_2s)))
     amp_10s = max(abs(pct(max_up_10s)), abs(pct(min_dn_10s)))
 
+    pre_idx = [i for i, t in enumerate(recv_ts) if t < t0]
+    pre_latency_samples = [latency_ms[i] for i in pre_idx if latency_ms[i] >= 0]
+    latency_baseline = (
+        statistics.median(pre_latency_samples)
+        if pre_latency_samples else max(latency_entry_ms, 1.0)
+    )
+
     post_latency = [latency_ms[i] for i in post_idx]
     max_lat_all = max(post_latency) if post_latency else 0.0
     within_2s_idx = [i for i, t in enumerate(recv_ts) if t0 <= t <= (t0 + peak_window_s)]
@@ -239,9 +268,10 @@ def analyze_post_settlement(
     entry_idx: Optional[int] = None
     entry_latency_ms: Optional[float] = None
     for idx in post_idx:
-        if latency_ms[idx] >= latency_entry_ms:
+        current_latency = latency_ms[idx]
+        if detect_latency_spike_threshold(current_latency, latency_baseline, latency_spike_multiplier):
             entry_idx = idx
-            entry_latency_ms = latency_ms[idx]
+            entry_latency_ms = current_latency
             break
 
     entry_triggered = entry_idx is not None
@@ -259,9 +289,23 @@ def analyze_post_settlement(
             'max_latency_ms_post': max_lat_all,
             'max_latency_ms_2s': max_lat_2s,
             'is_max_latency_in_2s': is_max_latency_in_2s,
+            'latency_baseline_ms': latency_baseline,
             'maker_side': side,
             'entry_triggered': False,
             'order_status': 'NO_ENTRY',
+            'entry_latency_ms': entry_latency_ms if entry_latency_ms is not None else 0.0,
+            'entry_price': 0.0,
+            'entry_eff_price': 0.0,
+            'stop_loss_price': 0.0,
+            'take_profit_price': 0.0,
+            'exit_type': None,
+            'exit_price': 0.0,
+            'exit_eff_price': 0.0,
+            'slippage_occurred': False,
+            'hold_time_s': None,
+            'maker_fee_bps': maker_fee_bps,
+            'taker_fee_bps': taker_fee_bps,
+            'leverage_results': {},
         }
 
     # Entry price
@@ -347,13 +391,13 @@ def analyze_post_settlement(
     
     if exit_idx is not None:
         order_status = 'FILLED'
-        m_fee = maker_fee_bps / 10000.0
+        exit_t_fee = taker_fee_bps / 10000.0
         
-        # Exit effective price
+        # Exit effective price (taker market order)
         if side == 'BUY':
-            exit_eff = exit_price * (1.0 - m_fee)
+            exit_eff = exit_price * (1.0 - exit_t_fee)
         else:
-            exit_eff = exit_price * (1.0 + m_fee)
+            exit_eff = exit_price * (1.0 + exit_t_fee)
         
         # 計算基礎價格變動百分比（未加槓桿）
         if side == 'BUY':
@@ -444,6 +488,7 @@ def analyze_post_settlement(
         'max_latency_ms_post': max_lat_all,
         'max_latency_ms_2s': max_lat_2s,
         'is_max_latency_in_2s': is_max_latency_in_2s,
+        'latency_baseline_ms': latency_baseline,
         'entry_triggered': True,
         'entry_latency_ms': entry_latency_ms,
         'maker_side': side,
@@ -574,8 +619,9 @@ async def _watch_loop(side: str, args):
                 fr,
                 peak_window_s=float(args.peak_window),
                 maker_fee_bps=float(getattr(args, 'maker_fee_bps', 0.0)),
-                taker_fee_bps=float(getattr(args, 'taker_fee_bps', 4.0)),
+                taker_fee_bps=float(getattr(args, 'taker_fee_bps', 2.75)),
                 latency_entry_ms=float(getattr(args, 'entry_latency_ms', 50.0)),
+                latency_spike_multiplier=float(getattr(args, 'latency_spike_multiplier', 2.0)),
                 leverage_list=leverage_list,  # 傳入槓桿列表
             )
             if not metrics:
@@ -592,7 +638,7 @@ async def _watch_loop(side: str, args):
                     'timestamp_utc','symbol','funding_time','lastFundingRate',
                     'pre_mid','mid_at_t0',
                     'max_up_2s_pct','min_dn_2s_pct','amp_2s_pct','amp_10s_pct',
-                    'max_latency_ms_post','max_latency_ms_2s','entry_latency_ms','is_max_latency_in_2s',
+                    'max_latency_ms_post','max_latency_ms_2s','latency_baseline_ms','entry_latency_ms','is_max_latency_in_2s',
                     'maker_side','entry_triggered','entry_price','entry_eff_price',
                     'stop_loss_price','take_profit_price',
                     'order_status','exit_type','exit_price','exit_eff_price',
@@ -626,22 +672,23 @@ async def _watch_loop(side: str, args):
                 f"{metrics['amp_10s_pct']:.6f}",
                 f"{metrics['max_latency_ms_post']:.1f}",
                 f"{metrics['max_latency_ms_2s']:.1f}",
+                f"{metrics.get('latency_baseline_ms', 0):.1f}",
                 f"{metrics.get('entry_latency_ms', 0):.1f}",
                 str(int(metrics['is_max_latency_in_2s'])),
                 metrics['maker_side'],
                 str(int(metrics['entry_triggered'])),
                 f"{metrics.get('entry_price', 0):.8f}",
                 f"{metrics.get('entry_eff_price', 0):.8f}",
-                f"{metrics.get('stop_loss_price', 0)::.8f}",
-                f"{metrics.get('take_profit_price', 0)::.8f}",
+                f"{metrics.get('stop_loss_price', 0):.8f}",
+                f"{metrics.get('take_profit_price', 0):.8f}",
                 metrics.get('order_status', 'UNKNOWN'),
                 metrics.get('exit_type', '') or '',
                 f"{metrics.get('exit_price', 0):.8f}" if metrics.get('exit_price') else '',
                 f"{metrics.get('exit_eff_price', 0):.8f}" if metrics.get('exit_eff_price') else '',
                 str(int(metrics.get('slippage_occurred', False))),
                 f"{metrics.get('hold_time_s', 0):.2f}" if metrics.get('hold_time_s') else '',
-                f"{metrics['maker_fee_bps']:.2f}",
-                f"{metrics['taker_fee_bps']:.2f}",
+                f"{metrics.get('maker_fee_bps', 0.0):.2f}",
+                f"{metrics.get('taker_fee_bps', 0.0):.2f}",
             ]
             
             # 添加各槓桿結果
@@ -689,11 +736,12 @@ async def main():
     parser.add_argument('--window-pre', type=float, default=15.0, help='seconds to keep before settlement')
     parser.add_argument('--window-post', type=float, default=15.0, help='seconds to keep after settlement')
     parser.add_argument('--peak-window', type=float, default=2.0, help='post-settlement window to test peak (seconds)')
-    parser.add_argument('--entry-latency-ms', type=float, default=50.0, help='latency threshold (ms) after settlement to trigger taker entry')
+    parser.add_argument('--entry-latency-ms', type=float, default=50.0, help='fallback latency baseline (ms) if pre-settlement samples are unavailable')
+    parser.add_argument('--latency-spike-multiplier', type=float, default=2.0, help='multiplier applied to latency baseline to detect spike')
     parser.add_argument('--write-raw', action='store_true', help='write raw bookTicker ticks to CSV')
     # Fees & slippage & exit
     parser.add_argument('--maker-fee-bps', type=float, default=0.0, help='maker fee in bps (default 0)')
-    parser.add_argument('--taker-fee-bps', type=float, default=4.0, help='taker fee in bps (default 4 = 0.04%)')
+    parser.add_argument('--taker-fee-bps', type=float, default=2.75, help='taker fee in bps (default 2.75 = 0.0275%)')
     parser.add_argument('--slippage-bps-exit', type=float, default=0.0, help='exit slippage in bps applied on market exit')
     parser.add_argument('--exit-windows', type=str, default='2,10', help='comma-separated exit horizons in seconds for PnL, e.g. 2,10')
     args, _ = parser.parse_known_args()
@@ -708,7 +756,7 @@ async def main():
             base_cols = [
                 'timestamp_utc','symbol','funding_time','lastFundingRate','pre_mid','mid_at_t0',
                 'max_up_2s_pct','min_dn_2s_pct','amp_2s_pct','amp_10s_pct',
-                'max_latency_ms_post','max_latency_ms_2s','entry_latency_ms','is_max_latency_in_2s',
+                'max_latency_ms_post','max_latency_ms_2s','latency_baseline_ms','entry_latency_ms','is_max_latency_in_2s',
                 'maker_side','maker_sim_price','maker_filled_2s',
                 'maker_fee_bps','taker_fee_bps','exit_slippage_bps','entry_eff_price'
             ]
@@ -745,6 +793,7 @@ async def main():
                     maker_fee_bps=float(args.maker_fee_bps),
                     taker_fee_bps=float(args.taker_fee_bps),
                     latency_entry_ms=float(args.entry_latency_ms),
+                    latency_spike_multiplier=float(args.latency_spike_multiplier),
                 )
                 if not metrics:
                     logger.warning(f"{sym} 沒有足夠資料可供分析")
@@ -765,14 +814,15 @@ async def main():
                     f"{metrics['amp_10s_pct']:.6f}",
                     f"{metrics['max_latency_ms_post']:.1f}",
                     f"{metrics['max_latency_ms_2s']:.1f}",
+                    f"{metrics.get('latency_baseline_ms', 0):.1f}",
                     f"{metrics['entry_latency_ms']:.1f}" if metrics.get('entry_latency_ms') is not None else "",
                     str(int(metrics['is_max_latency_in_2s'])),
                     metrics['maker_side'],
                     f"{metrics['maker_sim_price']:.8f}",
                     str(int(metrics['maker_filled_within_2s'])),
-                    f"{metrics['maker_fee_bps']:.2f}",
-                    f"{metrics['taker_fee_bps']:.2f}",
-                    f"{metrics['exit_slippage_bps']:.2f}",
+                    f"{metrics.get('maker_fee_bps', 0.0):.2f}",
+                    f"{metrics.get('taker_fee_bps', 0.0):.2f}",
+                    f"{metrics.get('exit_slippage_bps', 0.0):.2f}",
                     f"{metrics['entry_eff_price']:.8f}" if metrics.get('entry_eff_price') is not None else "",
                 ]
                 for w in exit_windows:
@@ -808,4 +858,3 @@ if __name__ == '__main__':
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("中斷執行，退出。")
-
