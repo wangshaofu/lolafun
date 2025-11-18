@@ -6,8 +6,9 @@ Handles exchange symbol precision data for proper price and quantity formatting.
 
 import asyncio
 import logging
-from typing import Dict, Optional
-from binance.um_futures import UMFutures
+from typing import Any, Dict, Optional
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -15,68 +16,83 @@ logger = logging.getLogger(__name__)
 class SymbolPrecisionManager:
     """Manages symbol precision data from exchange info"""
 
-    def __init__(self, client: UMFutures):
+    def __init__(self, client: Optional[Any] = None):
         self.client = client
         self.exchange_info = None
         self.precision_cache: Dict[str, Dict] = {}
 
     async def initialize(self) -> bool:
         """Fetch and cache exchange info for symbol precision data"""
+        if self.exchange_info is not None:
+            return True
+
         try:
-            if self.exchange_info is None:
-                logger.info("📡 Fetching exchange info for symbol precision data...")
-                loop = asyncio.get_event_loop()
-                self.exchange_info = await loop.run_in_executor(None, self.client.exchange_info)
-
-                # Cache symbol precision data for faster lookup
-                for symbol_info in self.exchange_info.get('symbols', []):
-                    symbol = symbol_info['symbol']
-
-                    # Initialize default values
-                    quantity_precision = 0
-                    price_precision = 2
-                    min_qty = 1
-                    step_size = 1
-                    tick_size = 0.01
-                    min_notional = 5.0
-
-                    # Extract precision data from filters
-                    for filter_info in symbol_info.get('filters', []):
-                        if filter_info['filterType'] == 'LOT_SIZE':
-                            step_size = float(filter_info['stepSize'])
-                            min_qty = float(filter_info['minQty'])
-                            # Calculate precision from step size
-                            step_str = filter_info['stepSize'].rstrip('0').rstrip('.')
-                            if '.' in step_str:
-                                quantity_precision = len(step_str.split('.')[1])
-
-                        elif filter_info['filterType'] == 'PRICE_FILTER':
-                            tick_size = float(filter_info['tickSize'])
-                            # Calculate price precision from tick size
-                            tick_str = filter_info['tickSize'].rstrip('0').rstrip('.')
-                            if '.' in tick_str:
-                                price_precision = len(tick_str.split('.')[1])
-
-                        elif filter_info['filterType'] == 'MIN_NOTIONAL':
-                            min_notional = float(filter_info['notional'])
-
-                    self.precision_cache[symbol] = {
-                        'quantityPrecision': quantity_precision,
-                        'pricePrecision': price_precision,
-                        'stepSize': step_size,
-                        'tickSize': tick_size,
-                        'minQty': min_qty,
-                        'minNotional': min_notional
-                    }
-
-                logger.info(f"✅ Exchange info cached for {len(self.precision_cache)} symbols")
-                return True
-
+            logger.info("📡 Fetching exchange info for symbol precision data...")
+            loop = asyncio.get_event_loop()
+            exchange_info = await loop.run_in_executor(None, self._fetch_exchange_info)
+            self._cache_exchange_info(exchange_info)
+            logger.info(f"✅ Exchange info cached for {len(self.precision_cache)} symbols")
+            return True
         except Exception as e:
             logger.error(f"❌ Failed to fetch exchange info: {e}")
             return False
 
-        return True
+    def _fetch_exchange_info(self) -> Dict:
+        """
+        Attempt to fetch exchange info via the provided client. Falls back to directly
+        calling the Binance Futures REST endpoint if needed.
+        """
+        # Prefer client-provided methods to avoid extra HTTP requests when possible
+        if self.client:
+            for attr in ("exchange_info", "fapiPublic_get_exchangeInfo", "fapiPublicGetExchangeInfo"):
+                method = getattr(self.client, attr, None)
+                if callable(method):
+                    return method()
+
+        response = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def _cache_exchange_info(self, exchange_info: Dict):
+        """Populate the local cache using the exchange info payload."""
+        self.exchange_info = exchange_info
+        for symbol_info in exchange_info.get('symbols', []):
+            symbol = symbol_info['symbol']
+
+            # Initialize default values
+            quantity_precision = 0
+            price_precision = 2
+            min_qty = 1
+            step_size = 1
+            tick_size = 0.01
+            min_notional = 5.0
+
+            # Extract precision data from filters
+            for filter_info in symbol_info.get('filters', []):
+                if filter_info['filterType'] == 'LOT_SIZE':
+                    step_size = float(filter_info['stepSize'])
+                    min_qty = float(filter_info['minQty'])
+                    step_str = filter_info['stepSize'].rstrip('0').rstrip('.')
+                    if '.' in step_str:
+                        quantity_precision = len(step_str.split('.')[1])
+
+                elif filter_info['filterType'] == 'PRICE_FILTER':
+                    tick_size = float(filter_info['tickSize'])
+                    tick_str = filter_info['tickSize'].rstrip('0').rstrip('.')
+                    if '.' in tick_str:
+                        price_precision = len(tick_str.split('.')[1])
+
+                elif filter_info['filterType'] == 'MIN_NOTIONAL':
+                    min_notional = float(filter_info['notional'])
+
+            self.precision_cache[symbol] = {
+                'quantityPrecision': quantity_precision,
+                'pricePrecision': price_precision,
+                'stepSize': step_size,
+                'tickSize': tick_size,
+                'minQty': min_qty,
+                'minNotional': min_notional
+            }
 
     def get_symbol_precision(self, symbol: str) -> Dict:
         """Get precision data for a symbol"""

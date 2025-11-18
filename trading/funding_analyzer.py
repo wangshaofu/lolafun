@@ -7,8 +7,7 @@ Now uses WebSocket Mark Price Stream for real-time updates.
 
 import asyncio
 import logging
-from typing import Dict, List, Tuple, Optional
-from binance.um_futures import UMFutures
+from typing import Any, Dict, List, Tuple, Optional
 from trading.funding_stream import FundingRateStream
 
 logger = logging.getLogger(__name__)
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 class FundingRateAnalyzer:
     """Analyzes funding rates and calculates trading levels using real-time WebSocket data"""
 
-    def __init__(self, client: UMFutures = None, update_speed: str = "1000ms"):
+    def __init__(self, client: Optional[Any] = None, update_speed: str = "1000ms"):
         # Note: client is now optional since we use pure WebSocket
         self.client = client  # Keep for backward compatibility, but not used
         # Trading parameters

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Settlement Trade Simulator (maker-first)
+Settlement Trade Simulator (maker-first, SELL-only)
 
 Mini README
-- Purpose: Collect Binance Futures bookTicker ticks around funding settlement, align to server time, and simulate a post-settlement maker entry with configurable exit horizons to estimate fill probability, latency, and net PnL after fees/slippage.
+- Purpose: Collect Binance Futures bookTicker ticks around funding settlement, align to server time, and simulate a post-settlement maker entry with configurable exit horizons to estimate fill probability, latency, and net PnL after fees/slippage. Strategy is calibrated for negative funding (short) only.
 
 - Quick Usage:
-  1) Auto-pick extremes by funding (both sides, continuous):
-     python analysis/settlement_trade_simulator.py --pick both --write-raw
+  1) Auto-pick extremes by negative funding (continuous):
+     python analysis/settlement_trade_simulator.py --pick neg --write-raw
 
   2) Run a fixed symbol list (one-off run per symbol):
      python analysis/settlement_trade_simulator.py --symbols JELLYJELLYUSDT,MUSDT --write-raw \
@@ -15,7 +15,7 @@ Mini README
 
 - Key Arguments:
   --symbols: Comma-separated symbols to run once; omit to auto-pick extremes.
-  --pick:    Auto-pick mode among {pos, neg, both, abs}; default both.
+  --pick:    Auto-pick mode (only 'neg' is supported).
   --min-quote-volume: 24h quoteVolume threshold for auto-pick (default 15,000,000).
   --start-before / --window-pre / --window-post: Capture windows around settlement (60 / 15 / 15s default).
   --peak-window: Seconds for the “2s window” style metrics and maker fill check (default 2).
@@ -33,7 +33,7 @@ Mini README
      Columns: recv_ts,event_ts_ms,update_id,bid,ask (server-aligned receive time).
 
 - Mechanics Summary:
-  - Direction: lastFundingRate < 0 => short via taker (hit bid); else long via taker (hit ask).
+  - Direction: Only lastFundingRate < 0 (short via taker hitting bid) is supported.
   - Entry trigger: estimate a pre-settlement latency baseline and enter when a post-settlement tick exceeds baseline × --latency-spike-multiplier (falling back to --entry-latency-ms if needed).
   - Fill check: `maker_filled_2s` now reflects whether the latency trigger was hit; price-drop statistics remain unchanged.
   - Exit/PnL: At each --exit-windows timestamp, exit via market (taker) with fee and optional slippage applied.
@@ -261,8 +261,12 @@ def analyze_post_settlement(
     max_lat_2s = max((latency_ms[i] for i in within_2s_idx), default=0.0)
     is_max_latency_in_2s = (abs(max_lat_2s - max_lat_all) < 1e-6) if post_latency else False
 
+    if last_funding_rate >= 0:
+        logger.info("⚠️ Funding rate >= 0，模擬僅支援做空方向，忽略該筆資料")
+        return {}
+
     analyzer = FundingRateAnalyzer()
-    side = 'SELL' if last_funding_rate < 0 else 'BUY'
+    side = 'SELL'
     
     # Entry trigger
     entry_idx: Optional[int] = None
@@ -580,7 +584,7 @@ def _suffix_for_window(w: float) -> str:
 
 
 async def _watch_loop(side: str, args):
-    assert side in ('pos', 'neg')
+    assert side == 'neg', "Only negative funding watcher is supported"
     
     # 定義槓桿列表
     leverage_list = [5, 10, 15, 20, 25]
@@ -730,7 +734,7 @@ async def main():
 
     parser = argparse.ArgumentParser(description="Settlement maker simulator with fee/slippage PnL backtest")
     parser.add_argument('--symbols', type=str, default=None, help='Comma separated symbols e.g. BTCUSDT,ETHUSDT. If omitted, auto-pick extreme funding.')
-    parser.add_argument('--pick', type=str, default='both', choices=['abs','pos','neg','both'], help='auto-pick: choose most pos/neg/both/abs (abs runs both watchers)')
+    parser.add_argument('--pick', type=str, default='neg', choices=['abs','pos','neg','both'], help='auto-pick mode (only neg/SELL is honored, others fallback to neg)')
     parser.add_argument('--min-quote-volume', type=float, default=15000000.0, help='24h USDT quoteVolume minimum; below it will fallback to next best')
     parser.add_argument('--start-before', type=float, default=60.0, help='seconds before settlement to start listening')
     parser.add_argument('--window-pre', type=float, default=15.0, help='seconds to keep before settlement')
@@ -745,6 +749,10 @@ async def main():
     parser.add_argument('--slippage-bps-exit', type=float, default=0.0, help='exit slippage in bps applied on market exit')
     parser.add_argument('--exit-windows', type=str, default='2,10', help='comma-separated exit horizons in seconds for PnL, e.g. 2,10')
     args, _ = parser.parse_known_args()
+
+    if args.pick != 'neg':
+        logger.warning("⚠️ 僅支援負 funding (SELL) 方向，已將 --pick 視為 'neg'")
+        args.pick = 'neg'
 
     # If symbols provided: run once for list; else auto-pick extremes repeatedly
     if args.symbols:
@@ -773,6 +781,9 @@ async def main():
                 info = await fetch_premium_index(session, sym)
                 if not info:
                     logger.warning(f"無法取得 {sym} premiumIndex，跳過")
+                    continue
+                if info.last_funding_rate >= 0:
+                    logger.info(f"{sym} funding rate >= 0，策略僅支援做空方向，跳過")
                     continue
 
                 # Collect and analyze once
@@ -839,11 +850,7 @@ async def main():
                     f.write(line)
                 logger.info(f"✅ {sym} 模擬完成，已寫入 {results_csv}")
     else:
-        tasks = []
-        if args.pick in ('both', 'pos', 'abs'):
-            tasks.append(asyncio.create_task(_watch_loop('pos', args)))
-        if args.pick in ('both', 'neg', 'abs'):
-            tasks.append(asyncio.create_task(_watch_loop('neg', args)))
+        tasks = [asyncio.create_task(_watch_loop('neg', args))]
 
         try:
             await asyncio.gather(*tasks)
