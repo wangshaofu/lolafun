@@ -121,6 +121,20 @@ class WebSocketPrecisionManager:
 
         return rounded_price
 
+    def format_quantity(self, symbol: str, quantity: float) -> str:
+        """Format quantity as string with proper precision"""
+        rounded_qty = self.round_quantity(symbol, quantity)
+        precision_data = self.get_symbol_precision(symbol)
+        precision = precision_data['quantity_precision']
+        return f"{rounded_qty:.{precision}f}"
+
+    def format_price(self, symbol: str, price: float) -> str:
+        """Format price as string with proper precision"""
+        rounded_price = self.round_price(symbol, price)
+        precision_data = self.get_symbol_precision(symbol)
+        precision = precision_data['price_precision']
+        return f"{rounded_price:.{precision}f}"
+
     def validate_order(self, symbol: str, quantity: float, price: float) -> tuple[bool, str]:
         """
         Validate order parameters

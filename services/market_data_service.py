@@ -146,6 +146,17 @@ class MarketDataService:
             logger.error(f"❌ Error capturing precise price for {symbol}: {e}")
             return None
 
+    def get_latest_tick_time(self, symbol: str) -> Optional[int]:
+        """Get the event time of the latest book ticker update for a symbol"""
+        try:
+            ticker_data = self.book_ticker_stream.get_ticker_data(symbol)
+            if ticker_data:
+                return ticker_data.get('eventTime')
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error getting latest tick time for {symbol}: {e}")
+            return None
+
     async def unsubscribe_symbol_ticker(self, symbol: str):
         """Unsubscribe from book ticker for a symbol"""
         try:

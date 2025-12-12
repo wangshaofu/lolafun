@@ -94,8 +94,20 @@ class ScheduledTrade:
             'price_changed': abs(self.current_price - old_price) > (old_price * 0.001)
         }
 
-    def should_execute(self, current_time_ms: int) -> bool:
-        """Check if trade should be executed now"""
+    def should_execute(self, current_time_ms: int, market_time_ms: Optional[int] = None) -> bool:
+        """
+        Check if trade should be executed now.
+        
+        Args:
+            current_time_ms: Current system time (NTP synced)
+            market_time_ms: Optional timestamp from the latest market tick
+        """
+        # If market time is available, use it to ensure we are past settlement
+        if market_time_ms is not None:
+            # We want to execute on the first tick AFTER settlement time
+            return market_time_ms >= self.settlement_time_ms and not self.is_executed
+
+        # Fallback to system time + delay if market time is not available
         execution_time = self.settlement_time_ms + self.execution_delay_ms
         return current_time_ms >= execution_time and not self.is_executed
 

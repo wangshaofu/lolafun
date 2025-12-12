@@ -144,8 +144,11 @@ class LiveTradingBot:
                 # Handle trade timing events
                 await self._handle_trade_timing(trade, current_time)
 
-                # Execute trade if it's time
-                if trade.should_execute(current_time):
+                # Get latest market tick time for event-based execution
+                market_time = self.market_data_service.get_latest_tick_time(trade.symbol)
+
+                # Execute trade if it's time (using market time if available)
+                if trade.should_execute(current_time, market_time):
                     success = await self.trading_service.execute_trade(trade)
                     if success:
                         self.scheduled_trades.remove(trade)

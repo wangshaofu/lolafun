@@ -394,11 +394,17 @@ async def collect_bookticker(
         server_offset = await fetch_server_time_offset(session) or 0.0
 
         t0 = funding_time_ms / 1000.0
-        desired_start = t0 - start_before_s
+        # 提前建立 WebSocket 連接以減少延遲（額外 30 秒緩衝）
+        ws_connection_buffer_s = 30.0
+        desired_start = t0 - start_before_s - ws_connection_buffer_s
         wait_s = desired_start - server_now(server_offset)
         if wait_s > 0:
-            logger.info(f"等待 {wait_s:.1f}s 至結算前 {start_before_s:.0f}s 開始監聽 {symbol}…")
+            logger.info(f"等待 {wait_s:.1f}s 至結算前 {start_before_s + ws_connection_buffer_s:.0f}s 開始建立 WebSocket 連接 {symbol}…")
             await asyncio.sleep(wait_s)
+
+        # 記錄 WebSocket 連接開始時間
+        ws_connect_start = server_now(server_offset)
+        logger.info(f"📡 開始建立 WebSocket 連接 {symbol}，距離結算 {t0 - ws_connect_start:.1f}s")
 
         try:
             ntp.force_sync_before_settlement(funding_time_ms)
@@ -414,6 +420,11 @@ async def collect_bookticker(
         entry_callback_done = False
 
         async with websockets.connect(url, ping_interval=None) as ws:
+            # 記錄 WebSocket 連接建立完成時間
+            ws_connect_done = server_now(server_offset)
+            ws_latency = ws_connect_done - ws_connect_start
+            logger.info(f"✅ WebSocket 連接已建立 {symbol}，耗時 {ws_latency:.3f}s，距離結算 {t0 - ws_connect_done:.1f}s")
+            
             async for raw in ws:
                 now_srv = server_now(server_offset)
                 data = json.loads(raw).get("data", {})
@@ -438,6 +449,11 @@ async def collect_bookticker(
                     # 第一筆「事件時間 >= funding_time」觸發實盤 callback
                     if (not entry_callback_done) and (ev_ts_ms >= funding_time_ms):
                         entry_callback_done = True
+                        # 計算時間差
+                        delay_ms = ev_ts_ms - funding_time_ms
+                        delay_s = delay_ms / 1000.0
+                        logger.info(f"⏱️ 偵測到首筆結算後 tick {symbol}：ev_ts={ev_ts_ms}, funding_time={funding_time_ms}, 延遲={delay_s:.3f}s")
+                        
                         if on_first_post_tick is not None:
                             try:
                                 await on_first_post_tick(now_srv, ev_ts_ms, bid, ask)
@@ -634,6 +650,9 @@ async def _watch_loop(side: str, args, real_trader: Optional[BinanceRealTrader] 
                         f"✅ 偵測到 {sym} 第一筆結算後 tick，準備立刻市價 SELL 入場…"
                         f" (ev_ts={ev_ts_ms}, funding_time={nft})"
                     )
+                    # 記錄交易執行開始時間（毫秒精度）
+                    trade_exec_start_ms = int(time.time() * 1000)
+                    
                     # 以當下 bid 當作 hint price，實盤會以市場成交價為準
                     trade_result = await real_trader.execute_short_trade(
                         symbol=sym,
@@ -643,7 +662,11 @@ async def _watch_loop(side: str, args, real_trader: Optional[BinanceRealTrader] 
                         hint_price=bid,
                     )
 
-                    taker_time_iso = datetime.now(timezone.utc).isoformat()
+                    # 記錄交易執行完成時間（毫秒精度）
+                    trade_exec_done_ms = int(time.time() * 1000)
+                    trade_exec_latency_ms = trade_exec_done_ms - trade_exec_start_ms
+                    
+                    taker_time_iso = datetime.now(timezone.utc).isoformat(timespec='milliseconds')
                     taker_price = (
                         trade_result.get("average")
                         or trade_result.get("price")
@@ -657,7 +680,8 @@ async def _watch_loop(side: str, args, real_trader: Optional[BinanceRealTrader] 
                     order_id = trade_result.get("id") or trade_result.get("info", {}).get("orderId")
 
                     logger.info(
-                        f"🕒 Taker 入場時間={taker_time_iso}, 價格={taker_price}, 數量={taker_qty}, orderId={order_id}"
+                        f"🕒 Taker 入場時間={taker_time_iso}, 價格={taker_price}, 數量={taker_qty}, "
+                        f"orderId={order_id}, 執行延遲={trade_exec_latency_ms}ms"
                     )
 
                     # 下 STOP_MARKET / TAKE_PROFIT_MARKET 出場單
@@ -677,19 +701,21 @@ async def _watch_loop(side: str, args, real_trader: Optional[BinanceRealTrader] 
                     trades_csv.parent.mkdir(parents=True, exist_ok=True)
                     if not trades_csv.exists():
                         header = (
-                            "timestamp_utc,symbol,funding_time,lastFundingRate,"
+                            "timestamp_utc_ms,symbol,funding_time_ms,lastFundingRate,"
                             "entry_event_ts_ms,entry_recv_ts,entry_hint_bid,"
-                            "taker_avg_price,taker_qty,tp_stop_price,sl_stop_price\n"
+                            "taker_avg_price,taker_qty,tp_stop_price,sl_stop_price,"
+                            "trade_exec_start_ms,trade_exec_done_ms,trade_exec_latency_ms\n"
                         )
                         trades_csv.write_text(header, encoding="utf-8")
 
                     line = (
-                        f"{taker_time_iso},{sym},{int(nft/1000)},{fr:.8f},"
+                        f"{trade_exec_done_ms},{sym},{nft},{fr:.8f},"
                         f"{ev_ts_ms},{recv_ts_srv:.6f},{bid:.8f},"
                         f"{float(taker_price) if taker_price else 0:.8f},"
                         f"{float(taker_qty) if taker_qty else 0:.6f},"
                         f"{tp_price if tp_price is not None else ''},"
-                        f"{sl_price if sl_price is not None else ''}\n"
+                        f"{sl_price if sl_price is not None else ''},"
+                        f"{trade_exec_start_ms},{trade_exec_done_ms},{trade_exec_latency_ms}\n"
                     )
                     with trades_csv.open("a", encoding="utf-8") as f:
                         f.write(line)
@@ -733,14 +759,14 @@ async def main():
     parser.add_argument(
         "--min-quote-volume",
         type=float,
-        default=15000000.0,
+        default=0.0,
         help="24h USDT quoteVolume minimum; below it will fallback to next best",
     )
     parser.add_argument(
         "--start-before",
         type=float,
-        default=60.0,
-        help="seconds before settlement to start listening",
+        default=90.0,
+        help="seconds before settlement to start listening (includes 30s WebSocket connection buffer)",
     )
     parser.add_argument(
         "--window-pre",
